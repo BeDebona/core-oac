@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 195 80% 5%;
+    --foreground: 0 0% 98%;
+
+    --card: 195 80% 8%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 195 80% 8%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 190 77% 48%;
+    --primary-foreground: 0 0% 9%;
+
+    --secondary: 195 80% 26%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 195 80% 12%;
+    --muted-foreground: 0 0% 63.9%;
+
+    --accent: 195 80% 15%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 98%;
+
+    --border: 195 80% 15%;
+    --input: 195 80% 15%;
+    --ring: 190 77% 48%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.glass-panel {
+  @apply bg-secondary/30 backdrop-blur-sm border border-secondary/50 rounded-lg;
+}
+
+.glass-card {
+  @apply bg-card/80 backdrop-blur-sm border border-border/50 rounded-lg;
+}
+
+.sidebar-item {
+  @apply flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors hover:bg-secondary/50;
+}
+
+.sidebar-item.active {
+  @apply bg-primary text-primary-foreground;
+}
+
+.sidebar-item:hover {
+  @apply bg-secondary/50;
+}
+
+.sidebar-item.active:hover {
+  @apply bg-primary/90;
+}
+
+/* Adicionar classes responsivas */
+@layer utilities {
+  .grid-responsive {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .grid-responsive-2 {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2;
+  }
+
+  .text-responsive {
+    @apply text-sm sm:text-base;
+  }
+
+  .heading-responsive {
+    @apply text-lg sm:text-xl md:text-2xl font-semibold;
+  }
+}
