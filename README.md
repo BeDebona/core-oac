@@ -31,13 +31,7 @@ Atualização automática quando a staff alterar as leis via painel.
 🧑‍⚖️ 4. Acesso exclusivo para Juízes/Alta Ordem
 Aprovação de Passaporte
 
+Documentação 
+https://bedebonas-organization.gitbook.io/documentacao-oac
 
-
-💼 FUNCIONALIDADE RP: USO EM CENAS
-Durante um julgamento: o advogado consulta e mostra provas.
-
-Na delegacia: verifica se há processos contra um cliente.
-
-No aeroporto ou consulado RP: cria ou verifica passaportes.
-
-Em reuniões da Ordem: aprova normas internas ou propõe alterações.
+Front-End by TrigX1DeV❤️
