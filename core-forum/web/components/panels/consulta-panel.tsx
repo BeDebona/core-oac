@@ -121,7 +121,7 @@ export const ConsultaPanel = () => {
             </CardHeader>
             <CardContent className="h-[calc(100%-5rem)] overflow-auto">
               <div className="space-y-4">
-                <LawItem title="ASSALTO A MÃO ARMADA" description="Pena: 100 meses de prisão e multa de $15,000" />
+                <LawItem title="Perturbação da Ordem Pública" description="Pena: 0 meses de prisão e multa de R$5,000 Fiança" />
                 <LawItem title="FURTO" description="Pena: 30 meses de prisão e multa de $5,000" />
                 <LawItem title="ROUBO" description="Pena: 45 meses de prisão e multa de $10,000" />
                 <LawItem title="DIREÇÃO PERIGOSA" description="Pena: 20 meses de prisão e multa de $3,000" />

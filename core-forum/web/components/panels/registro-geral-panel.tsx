@@ -12,7 +12,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { CameraModal } from "@/components/modals/camera-modal"
 import { sendToBackend } from "@/lib/api"
 
-export const PassportPanel = () => {
+export const RegistroGeralPanel = () => {
   const [formData, setFormData] = useState({
     name: "",
     identity: "",
@@ -54,7 +54,7 @@ export const PassportPanel = () => {
 
       toast({
         title: "Sucesso",
-        description: `Solicitação de passaporte #${response.id} enviada com sucesso!`,
+        description: `Solicitação de Registro Geral #${response.id} enviada com sucesso!`,
         variant: "default",
       })
 
@@ -67,7 +67,7 @@ export const PassportPanel = () => {
       })
       setPhoto(null)
     } catch (error) {
-      console.error("Erro ao enviar solicitação de passaporte:", error)
+      console.error("Erro ao enviar solicitação de Registro Geral:", error)
       toast({
         title: "Erro",
         description: "Ocorreu um erro ao enviar a solicitação. Tente novamente.",
@@ -86,7 +86,7 @@ export const PassportPanel = () => {
   return (
     <div className="flex h-full flex-col gap-4 overflow-auto">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight">Processo de Criação de Passaporte</h2>
+        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight">Processo de Criação de Registro Geral</h2>
       </div>
 
       <Card className="flex-1">

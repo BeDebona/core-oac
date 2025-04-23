@@ -18,7 +18,7 @@ local Cache = {
 
 -- Configurações
 local Config = {
-    Debug = false,
+    Debug = true,
     MaxPassaportesPorPagina = 20,
     MaxDocumentosPorPagina = 20,
     MaxProcessosPorPagina = 20,
@@ -48,20 +48,14 @@ local function LogAcao(source, acao, dados)
     if not Player then return end
     
     local playerName = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
-    local identifier = Player.PlayerData.citizenid
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local cid = Player.PlayerData.citizenid
     
-    -- Converter tabela para string JSON
-    local dadosJson = "null"
-    if dados then
-        dadosJson = json.encode(dados)
-    end
-    
-    -- Salvar log no banco de dados
-    MySQL.Async.execute('INSERT INTO oac_logs (identifier, nome, acao, dados, timestamp) VALUES (?, ?, ?, ?, ?)',
-        {identifier, playerName, acao, dadosJson, timestamp})
-    
-    LogInfo(string.format("Ação: %s | Usuário: %s | ID: %s", acao, playerName, identifier))
+    MySQL:insert('INSERT INTO oac_logs (player_name, citizenid, acao, dados, data) VALUES (?, ?, ?, ?, NOW())', {
+        playerName,
+        cid,
+        acao,
+        json.encode(dados)
+    })
 end
 
 -- Funções auxiliares

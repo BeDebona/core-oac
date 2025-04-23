@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useState, useEffect } from "react"
-import { Home, FileText, Search, Shield, FileSignature, Calendar, Settings, Menu, X, ChevronRight } from "lucide-react"
+import { Home, BookOpen, FileText, Search, Shield, FileSignature, Calendar, Settings, Menu, X, ChevronRight } from "lucide-react"
 import type { Panel } from "@/components/dashboard"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -92,11 +92,19 @@ export const Sidebar = ({ activePanel, setActivePanel }: SidebarProps) => {
                 isCollapsed={isCollapsed}
               />
               <SidebarItem
-                icon={<FileText className="h-4 w-4" />}
+                icon={<BookOpen className="h-4 w-4" />}
                 label="Passaporte"
                 panel="passaporte"
                 active={activePanel === "passaporte"}
                 onClick={() => handlePanelChange("passaporte")}
+                isCollapsed={isCollapsed}
+              />
+              <SidebarItem
+                icon={<FileText className="h-4 w-4" />}
+                label="Registro-Geral"
+                panel="registro-geral"
+                active={activePanel === "registro-geral"}
+                onClick={() => handlePanelChange("registro-geral")}
                 isCollapsed={isCollapsed}
               />
               <SidebarItem

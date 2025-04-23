@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar"
 import { Header } from "@/components/header"
 import { HomePanel } from "@/components/panels/home-panel"
 import { PassportPanel } from "@/components/panels/passport-panel"
+import { RegistroGeralPanel } from "@/components/panels/registro-geral-panel"
 import { ConsultaPanel } from "@/components/panels/consulta-panel"
 import { AltaOrdemPanel } from "@/components/panels/alta-ordem-panel"
 import { DocumentosPanel } from "@/components/panels/documentos-panel"
@@ -17,6 +18,7 @@ import { sendToBackend } from "@/lib/api"
 export type Panel =
   | "home"
   | "passaporte"
+  | "registro-geral"
   | "consulta"
   | "alta-ordem"
   | "documentos"
@@ -118,6 +120,7 @@ export const Dashboard = ({ registeredOab, onExit }: DashboardProps) => {
           <div className="glass-panel h-full overflow-hidden p-2 sm:p-4">
             {activePanel === "home" && <HomePanel userData={userData} />}
             {activePanel === "passaporte" && <PassportPanel />}
+            {activePanel === "registro-geral" && <RegistroGeralPanel />}
             {activePanel === "consulta" && <ConsultaPanel />}
             {activePanel === "alta-ordem" && <AltaOrdemPanel />}
             {activePanel === "documentos" && <DocumentosPanel />}

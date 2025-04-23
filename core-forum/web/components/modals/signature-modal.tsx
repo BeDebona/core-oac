@@ -1,7 +1,5 @@
 "use client"
 
-import type React from "react"
-
 import { useRef, useState, useEffect } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
@@ -16,49 +14,62 @@ interface SignatureModalProps {
 export const SignatureModal = ({ isOpen, onClose, onSave }: SignatureModalProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)
-  const [ctx, setCtx] = useState<CanvasRenderingContext2D | null>(null)
+
+  const setupCanvas = () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    // Define tamanho fixo para o canvas
+    const width = canvas.clientWidth
+    const height = canvas.clientHeight
+
+    canvas.width = width
+    canvas.height = height
+
+    const context = canvas.getContext("2d")
+    if (context) {
+      context.lineWidth = 2
+      context.lineCap = "round"
+      context.strokeStyle = "#000"
+    }
+  }
 
   useEffect(() => {
-    if (isOpen && canvasRef.current) {
-      const canvas = canvasRef.current
-      const context = canvas.getContext("2d")
-
-      if (context) {
-        // Set canvas dimensions
-        canvas.width = canvas.offsetWidth
-        canvas.height = canvas.offsetHeight
-
-        // Set drawing style
-        context.lineWidth = 2
-        context.lineCap = "round"
-        context.strokeStyle = "#000000"
-
-        setCtx(context)
-      }
+    if (isOpen) {
+      // Espera o dialog abrir completamente antes de configurar o canvas
+      requestAnimationFrame(() => {
+        setupCanvas()
+      })
     }
   }, [isOpen])
 
+  const getCtx = () => {
+    return canvasRef.current?.getContext("2d") ?? null
+  }
+
   const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    const ctx = getCtx()
     if (!ctx) return
 
     setIsDrawing(true)
     ctx.beginPath()
 
-    // Get coordinates
     const { offsetX, offsetY } = getCoordinates(e)
     ctx.moveTo(offsetX, offsetY)
   }
 
   const draw = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing || !ctx) return
+    if (!isDrawing) return
+    const ctx = getCtx()
+    if (!ctx) return
 
-    // Get coordinates
     const { offsetX, offsetY } = getCoordinates(e)
     ctx.lineTo(offsetX, offsetY)
     ctx.stroke()
   }
 
   const stopDrawing = () => {
+    const ctx = getCtx()
     if (!ctx) return
 
     setIsDrawing(false)
@@ -66,22 +77,18 @@ export const SignatureModal = ({ isOpen, onClose, onSave }: SignatureModalProps)
   }
 
   const getCoordinates = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!canvasRef.current) {
-      return { offsetX: 0, offsetY: 0 }
-    }
-
     const canvas = canvasRef.current
+    if (!canvas) return { offsetX: 0, offsetY: 0 }
+
     const rect = canvas.getBoundingClientRect()
 
     if ("touches" in e) {
-      // Touch event
       const touch = e.touches[0]
       return {
         offsetX: touch.clientX - rect.left,
         offsetY: touch.clientY - rect.top,
       }
     } else {
-      // Mouse event
       return {
         offsetX: e.clientX - rect.left,
         offsetY: e.clientY - rect.top,
@@ -90,15 +97,18 @@ export const SignatureModal = ({ isOpen, onClose, onSave }: SignatureModalProps)
   }
 
   const clearCanvas = () => {
-    if (!ctx || !canvasRef.current) return
+    const canvas = canvasRef.current
+    const ctx = getCtx()
+    if (!canvas || !ctx) return
 
-    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
   }
 
   const saveSignature = () => {
-    if (!canvasRef.current) return
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-    const signatureData = canvasRef.current.toDataURL("image/png")
+    const signatureData = canvas.toDataURL("image/png")
     onSave(signatureData)
   }
 
@@ -112,6 +122,7 @@ export const SignatureModal = ({ isOpen, onClose, onSave }: SignatureModalProps)
           <canvas
             ref={canvasRef}
             className="h-40 w-full cursor-crosshair rounded border border-gray-300"
+            style={{ display: "block" }}
             onMouseDown={startDrawing}
             onMouseMove={draw}
             onMouseUp={stopDrawing}
