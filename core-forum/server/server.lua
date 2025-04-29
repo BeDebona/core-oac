@@ -1,11 +1,11 @@
 -- ====================================================
 -- Sistema OAC - Ordem dos Advogados de Central City
 -- Servidor: Gerenciamento de dados e lógica de negócios
+-- Adaptado para Creative Framework
 -- ====================================================
 
--- Inicialização e dependências
-local QBCore = exports['qb-core']:GetCoreObject()
-local MySQL = exports['oxmysql']:GetModule("MySQL")
+-- Inicialização e dependências para Creative Framework
+-- Nenhuma necessidade de importar objetos como no QBCore
 
 -- Variáveis globais
 local Cache = {
@@ -13,7 +13,9 @@ local Cache = {
     Documentos = {},
     Leis = {},
     Usuarios = {},
-    Processos = {}
+    Processos = {},
+    Calendario = {},
+    AltaOrdem = {}
 }
 
 -- Configurações
@@ -44,15 +46,16 @@ local function LogErro(mensagem)
 end
 
 local function LogAcao(source, acao, dados)
-    local Player = QBCore.Functions.GetPlayer(source)
-    if not Player then return end
+    local identity = vRP.userIdentity(vRP.getUserId(source))
+    if not identity then return end
     
-    local playerName = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
-    local cid = Player.PlayerData.citizenid
+    local playerName = identity.name .. " " .. identity.name2
+    local registrado = identity.registration
     
-    MySQL:insert('INSERT INTO oac_logs (player_name, citizenid, acao, dados, data) VALUES (?, ?, ?, ?, NOW())', {
+    local query = "INSERT INTO oac_logs (player_name, registration, acao, dados, data) VALUES (?, ?, ?, ?, NOW())"
+    exports.oxmysql:execute(query, {
         playerName,
-        cid,
+        registrado,
         acao,
         json.encode(dados)
     })
@@ -132,45 +135,47 @@ local function ValidarCPF(cpf)
     return true
 end
 
--- Verificação de permissões
+-- Verificação de permissões para o Creative Framework
 local function ObterNivelPermissao(source)
-    local Player = QBCore.Functions.GetPlayer(source)
-    if not Player then return -1 end
+    local user_id = vRP.getUserId(source)
+    if not user_id then return -1 end
     
     -- Verificar se é administrador do servidor
-    if Player.Functions.GetPermission() == "admin" or Player.Functions.GetPermission() == "god" then
+    if vRP.hasPermission(user_id, "admin.permissao") then
         return Config.NiveisPermissao.Diretor
     end
     
-    -- Verificar cargo
-    local jobName = Player.PlayerData.job.name
-    local jobGrade = Player.PlayerData.job.grade.level
-    
-    if jobName == "judge" then
+    -- Verificar cargos no Creative Framework
+    -- Juiz
+    if vRP.hasPermission(user_id, "juiz.permissao") then
         return Config.NiveisPermissao.Juiz
-    elseif jobName == "prosecutor" then
-        return Config.NiveisPermissao.Promotor
-    elseif jobName == "lawyer" then
-        -- Verificar nível dentro da profissão
-        if jobGrade >= 3 then
-            return Config.NiveisPermissao.Diretor
-        elseif jobGrade >= 2 then
-            return Config.NiveisPermissao.Advogado
-        else
-            return Config.NiveisPermissao.Estagiario
-        end
     end
     
-    -- Verificar permissões específicas
-    if Player.Functions.HasPermission("oac.diretor") then
-        return Config.NiveisPermissao.Diretor
-    elseif Player.Functions.HasPermission("oac.juiz") then
-        return Config.NiveisPermissao.Juiz
-    elseif Player.Functions.HasPermission("oac.promotor") then
+    -- Promotor
+    if vRP.hasPermission(user_id, "promotor.permissao") then
         return Config.NiveisPermissao.Promotor
-    elseif Player.Functions.HasPermission("oac.advogado") then
+    end
+    
+    -- Advogado
+    -- Verificamos diferentes níveis de advogado
+    if vRP.hasPermission(user_id, "advogado.diretor") then
+        return Config.NiveisPermissao.Diretor
+    elseif vRP.hasPermission(user_id, "advogado.permissao") then
         return Config.NiveisPermissao.Advogado
-    elseif Player.Functions.HasPermission("oac.estagiario") then
+    elseif vRP.hasPermission(user_id, "advogado.estagiario") then
+        return Config.NiveisPermissao.Estagiario
+    end
+    
+    -- Verificar permissões específicas da OAC
+    if vRP.hasPermission(user_id, "oac.diretor") then
+        return Config.NiveisPermissao.Diretor
+    elseif vRP.hasPermission(user_id, "oac.juiz") then
+        return Config.NiveisPermissao.Juiz
+    elseif vRP.hasPermission(user_id, "oac.promotor") then
+        return Config.NiveisPermissao.Promotor
+    elseif vRP.hasPermission(user_id, "oac.advogado") then
+        return Config.NiveisPermissao.Advogado
+    elseif vRP.hasPermission(user_id, "oac.estagiario") then
         return Config.NiveisPermissao.Estagiario
     end
     
@@ -194,905 +199,118 @@ end
 local function CarregarLeis()
     LogInfo("Carregando leis do banco de dados...")
     
-    local result = MySQL.Sync.fetchAll("SELECT * FROM oac_leis ORDER BY categoria, id")
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_leis ORDER BY categoria, id")
     
     if result and #result > 0 then
-        Cache.Leis = {}
-        
-        for _, v in ipairs(result) do
-            table.insert(Cache.Leis, {
-                id = v.id,
-                categoria = v.categoria,
-                titulo = v.titulo,
-                conteudo = v.conteudo
-            })
-        end
-        
-        LogInfo("Carregadas " .. #Cache.Leis .. " leis.")
+        Cache.Leis = result
+        LogInfo("Leis carregadas: " .. #result)
     else
-        -- Inserir leis padrão se não existirem
-        if #Cache.Leis == 0 then
-            Cache.Leis = {
-                {id = 1, categoria = "Código Penal", titulo = "Artigo 1 - Furto", conteudo = "Pena: 30 meses de prisão e multa de $5,000"},
-                {id = 2, categoria = "Código Penal", titulo = "Artigo 2 - Roubo", conteudo = "Pena: 45 meses de prisão e multa de $10,000"},
-                {id = 3, categoria = "Código Penal", titulo = "Artigo 3 - Assalto a Mão Armada", conteudo = "Pena: 100 meses de prisão e multa de $15,000"}
-            }
-            
-            -- Salvar no banco de dados
-            for _, lei in ipairs(Cache.Leis) do
-                MySQL.Async.execute('INSERT INTO oac_leis (id, categoria, titulo, conteudo) VALUES (?, ?, ?, ?)',
-                    {lei.id, lei.categoria, lei.titulo, lei.conteudo})
-            end
-            
-            LogInfo("Inseridas " .. #Cache.Leis .. " leis padrão.")
-        end
+        LogInfo("Nenhuma lei encontrada no banco de dados.")
     end
 end
 
 local function CarregarPassaportes()
     LogInfo("Carregando passaportes do banco de dados...")
     
-    local result = MySQL.Sync.fetchAll("SELECT * FROM oac_passaportes ORDER BY created_at DESC")
-    
-    Cache.Passaportes = {}
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_passaportes ORDER BY created_at DESC LIMIT 100")
     
     if result and #result > 0 then
-        for _, v in ipairs(result) do
-            table.insert(Cache.Passaportes, {
-                id = v.id,
-                nome = v.nome,
-                identidade = v.identidade,
-                dataNascimento = v.data_nascimento,
-                foto = v.foto,
-                status = v.status,
-                createdAt = v.created_at,
-                updatedAt = v.updated_at,
-                aprovadoPor = v.aprovado_por,
-                rejeitadoPor = v.rejeitado_por,
-                motivoRejeicao = v.motivo_rejeicao
-            })
-        end
-        
-        LogInfo("Carregados " .. #Cache.Passaportes .. " passaportes.")
+        Cache.Passaportes = result
+        LogInfo("Passaportes carregados: " .. #result)
+    else
+        LogInfo("Nenhum passaporte encontrado no banco de dados.")
     end
 end
 
 local function CarregarDocumentos()
     LogInfo("Carregando documentos do banco de dados...")
     
-    local result = MySQL.Sync.fetchAll("SELECT * FROM oac_documentos ORDER BY created_at DESC")
-    
-    Cache.Documentos = {}
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_documentos ORDER BY updated_at DESC LIMIT 100")
     
     if result and #result > 0 then
-        for _, v in ipairs(result) do
-            table.insert(Cache.Documentos, {
-                id = v.id,
-                tipo = v.tipo,
-                nome = v.nome,
-                identidade = v.identidade,
-                descricao = v.descricao,
-                evidencias = json.decode(v.evidencias),
-                status = v.status,
-                createdAt = v.created_at,
-                updatedAt = v.updated_at,
-                criadoPor = v.criado_por,
-                assinatura = v.assinatura
-            })
-        end
-        
-        LogInfo("Carregados " .. #Cache.Documentos .. " documentos.")
+        Cache.Documentos = result
+        LogInfo("Documentos carregados: " .. #result)
+    else
+        LogInfo("Nenhum documento encontrado no banco de dados.")
     end
 end
 
 local function CarregarUsuarios()
     LogInfo("Carregando usuários do banco de dados...")
     
-    local result = MySQL.Sync.fetchAll("SELECT * FROM oac_usuarios")
-    
-    Cache.Usuarios = {}
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_usuarios ORDER BY nome")
     
     if result and #result > 0 then
-        for _, v in ipairs(result) do
-            Cache.Usuarios[v.oab] = {
-                id = v.id,
-                nome = v.nome,
-                oab = v.oab,
-                cargo = v.cargo,
-                nivel = v.nivel,
-                avatar = v.avatar,
-                email = v.email,
-                telefone = v.telefone,
-                ultimoAcesso = v.ultimo_acesso
-            }
-        end
-        
-        LogInfo("Carregados " .. #result .. " usuários.")
+        Cache.Usuarios = result
+        LogInfo("Usuários carregados: " .. #result)
+    else
+        LogInfo("Nenhum usuário encontrado no banco de dados.")
     end
 end
 
 local function CarregarProcessos()
     LogInfo("Carregando processos do banco de dados...")
     
-    local result = MySQL.Sync.fetchAll("SELECT * FROM oac_processos ORDER BY created_at DESC")
-    
-    Cache.Processos = {}
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_processos ORDER BY updated_at DESC LIMIT 100")
     
     if result and #result > 0 then
-        for _, v in ipairs(result) do
-            table.insert(Cache.Processos, {
-                id = v.id,
-                numero = v.numero,
-                titulo = v.titulo,
-                descricao = v.descricao,
-                reu = v.reu,
-                identidadeReu = v.identidade_reu,
-                advogado = v.advogado,
-                promotor = v.promotor,
-                juiz = v.juiz,
-                status = v.status,
-                dataAudiencia = v.data_audiencia,
-                documentos = json.decode(v.documentos),
-                createdAt = v.created_at,
-                updatedAt = v.updated_at
-            })
-        end
-        
-        LogInfo("Carregados " .. #Cache.Processos .. " processos.")
-    end
-end
-
--- Funções de atualização de dados
-local function AtualizarPassaporte(id, dados)
-    -- Atualizar no cache
-    for i, passaporte in ipairs(Cache.Passaportes) do
-        if passaporte.id == id then
-            for k, v in pairs(dados) do
-                Cache.Passaportes[i][k] = v
-            end
-            Cache.Passaportes[i].updatedAt = os.date("%Y-%m-%d %H:%M:%S")
-            break
-        end
-    end
-    
-    -- Preparar campos para atualização no banco de dados
-    local campos = {}
-    local valores = {}
-    
-    for k, v in pairs(dados) do
-        -- Converter camelCase para snake_case
-        local campo = k:gsub("([A-Z])", function(c) return "_" .. c:lower() end)
-        table.insert(campos, campo .. " = ?")
-        table.insert(valores, v)
-    end
-    
-    table.insert(campos, "updated_at = ?")
-    table.insert(valores, os.date("%Y-%m-%d %H:%M:%S"))
-    
-    -- Adicionar ID no final dos valores
-    table.insert(valores, id)
-    
-    -- Executar query
-    MySQL.Async.execute('UPDATE oac_passaportes SET ' .. table.concat(campos, ", ") .. ' WHERE id = ?', valores)
-end
-
-local function AtualizarDocumento(id, dados)
-    -- Atualizar no cache
-    for i, documento in ipairs(Cache.Documentos) do
-        if documento.id == id then
-            for k, v in pairs(dados) do
-                Cache.Documentos[i][k] = v
-            end
-            Cache.Documentos[i].updatedAt = os.date("%Y-%m-%d %H:%M:%S")
-            break
-        end
-    end
-    
-    -- Preparar campos para atualização no banco de dados
-    local campos = {}
-    local valores = {}
-    
-    for k, v in pairs(dados) do
-        -- Converter camelCase para snake_case e tratar campos especiais
-        local campo = k:gsub("([A-Z])", function(c) return "_" .. c:lower() end)
-        
-        if k == "evidencias" then
-            table.insert(campos, "evidencias = ?")
-            table.insert(valores, json.encode(v))
-        else
-            table.insert(campos, campo .. " = ?")
-            table.insert(valores, v)
-        end
-    end
-    
-    table.insert(campos, "updated_at = ?")
-    table.insert(valores, os.date("%Y-%m-%d %H:%M:%S"))
-    
-    -- Adicionar ID no final dos valores
-    table.insert(valores, id)
-    
-    -- Executar query
-    MySQL.Async.execute('UPDATE oac_documentos SET ' .. table.concat(campos, ", ") .. ' WHERE id = ?', valores)
-end
-
-local function AtualizarUsuario(oab, dados)
-    -- Atualizar no cache
-    if Cache.Usuarios[oab] then
-        for k, v in pairs(dados) do
-            Cache.Usuarios[oab][k] = v
-        end
-        Cache.Usuarios[oab].ultimoAcesso = os.date("%Y-%m-%d %H:%M:%S")
-    end
-    
-    -- Preparar campos para atualização no banco de dados
-    local campos = {}
-    local valores = {}
-    
-    for k, v in pairs(dados) do
-        -- Converter camelCase para snake_case
-        local campo = k:gsub("([A-Z])", function(c) return "_" .. c:lower() end)
-        table.insert(campos, campo .. " = ?")
-        table.insert(valores, v)
-    end
-    
-    table.insert(campos, "ultimo_acesso = ?")
-    table.insert(valores, os.date("%Y-%m-%d %H:%M:%S"))
-    
-    -- Adicionar OAB no final dos valores
-    table.insert(valores, oab)
-    
-    -- Executar query
-    MySQL.Async.execute('UPDATE oac_usuarios SET ' .. table.concat(campos, ", ") .. ' WHERE oab = ?', valores)
-end
-
--- Funções de notificação
-local function NotificarJuizes(mensagem)
-    local players = QBCore.Functions.GetPlayers()
-    
-    for _, playerId in ipairs(players) do
-        local Player = QBCore.Functions.GetPlayer(playerId)
-        
-        if Player and (Player.PlayerData.job.name == "judge" or TemPermissao(playerId, Config.NiveisPermissao.Juiz)) then
-            TriggerClientEvent('QBCore:Notify', playerId, mensagem, 'info')
-            TriggerClientEvent('oac:notification', playerId, {
-                type = "info",
-                title = "Nova Solicitação",
-                message = mensagem,
-                icon = "gavel"
-            })
-        end
-    end
-end
-
-local function NotificarAdvogados(mensagem)
-    local players = QBCore.Functions.GetPlayers()
-    
-    for _, playerId in ipairs(players) do
-        local Player = QBCore.Functions.GetPlayer(playerId)
-        
-        if Player and (Player.PlayerData.job.name == "lawyer" or TemPermissao(playerId, Config.NiveisPermissao.Advogado)) then
-            TriggerClientEvent('QBCore:Notify', playerId, mensagem, 'info')
-            TriggerClientEvent('oac:notification', playerId, {
-                type = "info",
-                title = "Notificação OAC",
-                message = mensagem,
-                icon = "briefcase"
-            })
-        end
-    end
-end
-
--- Callbacks
-QBCore.Functions.CreateCallback('oac:getPlayerInfo', function(source, cb, data)
-    local Player = QBCore.Functions.GetPlayer(source)
-    
-    if not Player then
-        cb(nil)
-        return
-    end
-    
-    local oab = data.oab
-    
-    -- Se não foi fornecido um OAB, verificar se o jogador já tem um registrado
-    if not oab or oab == "" then
-        -- Buscar por citizenid
-        local citizenid = Player.PlayerData.citizenid
-        
-        for registeredOab, usuario in pairs(Cache.Usuarios) do
-            if usuario.id == citizenid then
-                oab = registeredOab
-                break
-            end
-        end
-        
-        -- Se ainda não tiver OAB, gerar um novo
-        if not oab or oab == "" then
-            -- Gerar OAB no formato XXX-XXXXXX
-            local prefix = math.random(100, 999)
-            local suffix = math.random(100000, 999999)
-            oab = prefix .. "-" .. suffix
-        end
-    end
-    
-    -- Verificar se o usuário já existe
-    local usuarioExistente = Cache.Usuarios[oab]
-    
-    if usuarioExistente then
-        -- Atualizar último acesso
-        AtualizarUsuario(oab, {ultimoAcesso = os.date("%Y-%m-%d %H:%M:%S")})
-        cb(usuarioExistente)
-        return
-    end
-    
-    -- Criar novo usuário
-    local nivelPermissao = ObterNivelPermissao(source)
-    local nivel = "INICIANTE"
-    
-    if nivelPermissao >= Config.NiveisPermissao.Juiz then
-        nivel = "ALTA ORDEM"
-    elseif nivelPermissao >= Config.NiveisPermissao.Advogado then
-        nivel = "SÊNIOR"
-    end
-    
-    local playerInfo = {
-        id = Player.PlayerData.citizenid,
-        nome = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname,
-        oab = oab,
-        cargo = Player.PlayerData.job.label,
-        nivel = nivel,
-        avatar = "https://i.imgur.com/default.png", -- Em um sistema real, isso seria a foto do personagem
-        email = Player.PlayerData.charinfo.email or Player.PlayerData.charinfo.firstname:lower() .. "@oac.cc",
-        telefone = Player.PlayerData.charinfo.phone or "000-0000",
-        ultimoAcesso = os.date("%Y-%m-%d %H:%M:%S")
-    }
-    
-    cb(playerInfo)
-end)
-
-QBCore.Functions.CreateCallback('oac:getLeis', function(source, cb)
-    if not VerificarPermissaoForum(source) then
-        cb({})
-        return
-    end
-    
-    cb(Cache.Leis)
-end)
-
-QBCore.Functions.CreateCallback('oac:getPassaportes', function(source, cb, data)
-    if not VerificarPermissaoForum(source) then
-        cb({})
-        return
-    end
-    
-    local pagina = data and data.pagina or 1
-    local porPagina = data and data.porPagina or Config.MaxPassaportesPorPagina
-    local filtro = data and data.filtro or nil
-    
-    -- Aplicar filtros se necessário
-    local passaportesFiltrados = {}
-    
-    if filtro then
-        for _, passaporte in ipairs(Cache.Passaportes) do
-            local corresponde = true
-            
-            if filtro.status and passaporte.status ~= filtro.status then
-                corresponde = false
-            end
-            
-            if filtro.nome and not string.find(string.lower(passaporte.nome), string.lower(filtro.nome)) then
-                corresponde = false
-            end
-            
-            if filtro.identidade and not string.find(passaporte.identidade, filtro.identidade) then
-                corresponde = false
-            end
-            
-            if corresponde then
-                table.insert(passaportesFiltrados, passaporte)
-            end
-        end
+        Cache.Processos = result
+        LogInfo("Processos carregados: " .. #result)
     else
-        passaportesFiltrados = Cache.Passaportes
+        LogInfo("Nenhum processo encontrado no banco de dados.")
     end
-    
-    -- Calcular paginação
-    local inicio = (pagina - 1) * porPagina + 1
-    local fim = math.min(inicio + porPagina - 1, #passaportesFiltrados)
-    
-    local resultado = {
-        passaportes = {},
-        total = #passaportesFiltrados,
-        pagina = pagina,
-        totalPaginas = math.ceil(#passaportesFiltrados / porPagina)
-    }
-    
-    for i = inicio, fim do
-        table.insert(resultado.passaportes, passaportesFiltrados[i])
-    end
-    
-    cb(resultado)
-end)
+end
 
-QBCore.Functions.CreateCallback('oac:getDocumentos', function(source, cb, data)
-    if not VerificarPermissaoForum(source) then
-        cb({})
-        return
-    end
+local function CarregarEventosCalendario()
+    LogInfo("Carregando eventos do calendário...")
     
-    local pagina = data and data.pagina or 1
-    local porPagina = data and data.porPagina or Config.MaxDocumentosPorPagina
-    local filtro = data and data.filtro or nil
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_calendario ORDER BY data_inicio DESC LIMIT 100")
     
-    -- Aplicar filtros se necessário
-    local documentosFiltrados = {}
-    
-    if filtro then
-        for _, documento in ipairs(Cache.Documentos) do
-            local corresponde = true
-            
-            if filtro.tipo and documento.tipo ~= filtro.tipo then
-                corresponde = false
-            end
-            
-            if filtro.status and documento.status ~= filtro.status then
-                corresponde = false
-            end
-            
-            if filtro.nome and not string.find(string.lower(documento.nome), string.lower(filtro.nome)) then
-                corresponde = false
-            end
-            
-            if corresponde then
-                table.insert(documentosFiltrados, documento)
-            end
-        end
+    if result and #result > 0 then
+        Cache.Calendario = result
+        LogInfo("Eventos do calendário carregados: " .. #result)
     else
-        documentosFiltrados = Cache.Documentos
+        LogInfo("Nenhum evento de calendário encontrado no banco de dados.")
     end
-    
-    -- Calcular paginação
-    local inicio = (pagina - 1) * porPagina + 1
-    local fim = math.min(inicio + porPagina - 1, #documentosFiltrados)
-    
-    local resultado = {
-        documentos = {},
-        total = #documentosFiltrados,
-        pagina = pagina,
-        totalPaginas = math.ceil(#documentosFiltrados / porPagina)
-    }
-    
-    for i = inicio, fim do
-        table.insert(resultado.documentos, documentosFiltrados[i])
-    end
-    
-    cb(resultado)
-end)
+end
 
-QBCore.Functions.CreateCallback('oac:getProcessos', function(source, cb, data)
-    if not VerificarPermissaoForum(source) then
-        cb({})
-        return
-    end
+local function CarregarDecisoesAltaOrdem()
+    LogInfo("Carregando decisões da alta ordem...")
     
-    local pagina = data and data.pagina or 1
-    local porPagina = data and data.porPagina or Config.MaxProcessosPorPagina
-    local filtro = data and data.filtro or nil
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_alta_ordem ORDER BY updated_at DESC LIMIT 100")
     
-    -- Aplicar filtros se necessário
-    local processosFiltrados = {}
-    
-    if filtro then
-        for _, processo in ipairs(Cache.Processos) do
-            local corresponde = true
-            
-            if filtro.status and processo.status ~= filtro.status then
-                corresponde = false
-            end
-            
-            if filtro.reu and not string.find(string.lower(processo.reu), string.lower(filtro.reu)) then
-                corresponde = false
-            end
-            
-            if filtro.numero and not string.find(processo.numero, filtro.numero) then
-                corresponde = false
-            end
-            
-            if corresponde then
-                table.insert(processosFiltrados, processo)
-            end
-        end
+    if result and #result > 0 then
+        Cache.AltaOrdem = result
+        LogInfo("Decisões da alta ordem carregadas: " .. #result)
     else
-        processosFiltrados = Cache.Processos
+        LogInfo("Nenhuma decisão da alta ordem encontrada no banco de dados.")
     end
-    
-    -- Calcular paginação
-    local inicio = (pagina - 1) * porPagina + 1
-    local fim = math.min(inicio + porPagina - 1, #processosFiltrados)
-    
-    local resultado = {
-        processos = {},
-        total = #processosFiltrados,
-        pagina = pagina,
-        totalPaginas = math.ceil(#processosFiltrados / porPagina)
-    }
-    
-    for i = inicio, fim do
-        table.insert(resultado.processos, processosFiltrados[i])
-    end
-    
-    cb(resultado)
-end)
+end
 
--- Eventos
-RegisterNetEvent('oac:registerOab')
-AddEventHandler('oac:registerOab', function(data)
-    local source = source
-    local Player = QBCore.Functions.GetPlayer(source)
+-- Inicialização do banco de dados
+local function InicializarBancoDados()
+    LogInfo("Inicializando banco de dados...")
     
-    if not Player then
-        TriggerClientEvent('QBCore:Notify', source, 'Erro ao obter informações do jogador!', 'error')
-        return
-    end
+    -- Criar tabelas no banco de dados
+    exports.oxmysql:execute([[
+        CREATE TABLE IF NOT EXISTS oac_leis (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            categoria VARCHAR(50) NOT NULL,
+            titulo VARCHAR(255) NOT NULL,
+            conteudo TEXT NOT NULL
+        )
+    ]])
     
-    -- Validar dados
-    if not data.name or not data.oab then
-        TriggerClientEvent('QBCore:Notify', source, 'Dados incompletos!', 'error')
-        return
-    end
-    
-    -- Verificar se o OAB já existe
-    if Cache.Usuarios[data.oab] then
-        TriggerClientEvent('QBCore:Notify', source, 'Este número OAB já está registrado!', 'error')
-        return
-    end
-    
-    -- Determinar nível com base nas permissões
-    local nivelPermissao = ObterNivelPermissao(source)
-    local nivel = "INICIANTE"
-    
-    if nivelPermissao >= Config.NiveisPermissao.Juiz then
-        nivel = "ALTA ORDEM"
-    elseif nivelPermissao >= Config.NiveisPermissao.Advogado then
-        nivel = "SÊNIOR"
-    end
-    
-    -- Criar novo usuário
-    local novoUsuario = {
-        id = Player.PlayerData.citizenid,
-        nome = data.name,
-        oab = data.oab,
-        cargo = Player.PlayerData.job.label,
-        nivel = nivel,
-        avatar = "https://host-trig.vercel.app/files/Logo_Branca.png",
-        email = Player.PlayerData.charinfo.email or data.name:lower():gsub("%s+", ".") .. "@oac.cc",
-        telefone = Player.PlayerData.charinfo.phone or "000-0000",
-        ultimoAcesso = os.date("%Y-%m-%d %H:%M:%S")
-    }
-    
-    -- Salvar no banco de dados
-    MySQL.Async.execute('INSERT INTO oac_usuarios (id, nome, oab, cargo, nivel, avatar, email, telefone, ultimo_acesso) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        {novoUsuario.id, novoUsuario.nome, novoUsuario.oab, novoUsuario.cargo, novoUsuario.nivel, novoUsuario.avatar, novoUsuario.email, novoUsuario.telefone, novoUsuario.ultimoAcesso})
-    
-    -- Adicionar à lista em memória
-    Cache.Usuarios[data.oab] = novoUsuario
-    
-    -- Registrar log
-    LogAcao(source, "registro_oab", {oab = data.oab, nome = data.name})
-    
-    -- Notificar cliente
-    TriggerClientEvent('QBCore:Notify', source, 'Registro OAC concluído com sucesso!', 'success')
-    
-    -- Enviar resposta ao cliente
-    TriggerClientEvent('oac:callback', source, 'registerOab', {success = true})
-end)
-
-RegisterNetEvent('oac:createPassport')
-AddEventHandler('oac:createPassport', function(data)
-    local source = source
-    
-    if not VerificarPermissaoForum(source) then
-        TriggerClientEvent('QBCore:Notify', source, 'Você não tem permissão para isso!', 'error')
-        TriggerClientEvent('oac:callback', source, 'createPassport', {success = false, error = "Sem permissão"})
-        return
-    end
-    
-    -- Validar dados
-    if not data.nome or not data.identidade or not data.dataNascimento or not data.foto then
-        TriggerClientEvent('QBCore:Notify', source, 'Dados incompletos!', 'error')
-        TriggerClientEvent('oac:callback', source, 'createPassport', {success = false, error = "Dados incompletos"})
-        return
-    end
-    
-    -- Validar CPF/RG
-    if not ValidarCPF(data.identidade) then
-        TriggerClientEvent('QBCore:Notify', source, 'CPF/RG inválido!', 'error')
-        TriggerClientEvent('oac:callback', source, 'createPassport', {success = false, error = "CPF/RG inválido"})
-        return
-    end
-    
-    -- Formatar data de nascimento
-    local dataNascimento = FormatarData(data.dataNascimento)
-    if not dataNascimento then
-        TriggerClientEvent('QBCore:Notify', source, 'Data de nascimento inválida!', 'error')
-        TriggerClientEvent('oac:callback', source, 'createPassport', {success = false, error = "Data inválida"})
-        return
-    end
-    
-    -- Gerar ID único
-    local id = GerarId()
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-    
-    -- Obter informações do criador
-    local Player = QBCore.Functions.GetPlayer(source)
-    local criadorNome = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
-    local criadorId = Player.PlayerData.citizenid
-    
-    -- Criar novo passaporte
-    local novoPassaporte = {
-        id = id,
-        nome = data.nome,
-        identidade = data.identidade,
-        dataNascimento = dataNascimento,
-        foto = data.foto,
-        status = "pendente",
-        createdAt = timestamp,
-        updatedAt = timestamp,
-        criadoPor = criadorId,
-        criadoPorNome = criadorNome
-    }
-    
-    -- Salvar no banco de dados
-    MySQL.Async.execute('INSERT INTO oac_passaportes (id, nome, identidade, data_nascimento, foto, status, created_at, updated_at, criado_por, criado_por_nome) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        {id, data.nome, data.identidade, dataNascimento, data.foto, "pendente", timestamp, timestamp, criadorId, criadorNome})
-    
-    -- Adicionar à lista em memória
-    table.insert(Cache.Passaportes, 1, novoPassaporte)
-    
-    -- Registrar log
-    LogAcao(source, "criar_passaporte", {id = id, nome = data.nome, identidade = data.identidade})
-    
-    -- Notificar cliente
-    TriggerClientEvent('QBCore:Notify', source, 'Solicitação de passaporte enviada com sucesso!', 'success')
-    
-    -- Enviar resposta ao cliente
-    TriggerClientEvent('oac:callback', source, 'createPassport', {success = true, id = id})
-    
-    -- Notificar juízes sobre nova solicitação
-    NotificarJuizes('Nova solicitação de passaporte pendente de aprovação!')
-end)
-
-RegisterNetEvent('oac:approvePassport')
-AddEventHandler('oac:approvePassport', function(data)
-    local source = source
-    
-    if not VerificarPermissaoAltaOrdem(source) then
-        TriggerClientEvent('QBCore:Notify', source, 'Você não tem permissão para isso!', 'error')
-        TriggerClientEvent('oac:callback', source, 'approvePassport', {success = false, error = "Sem permissão"})
-        return
-    end
-    
-    -- Encontrar passaporte
-    local passaporte = nil
-    local index = 0
-    
-    for i, p in ipairs(Cache.Passaportes) do
-        if p.id == data.id then
-            passaporte = p
-            index = i
-            break
-        end
-    end
-    
-    if not passaporte then
-        TriggerClientEvent('QBCore:Notify', source, 'Passaporte não encontrado!', 'error')
-        TriggerClientEvent('oac:callback', source, 'approvePassport', {success = false, error = "Passaporte não encontrado"})
-        return
-    end
-    
-    -- Verificar se já foi aprovado ou rejeitado
-    if passaporte.status ~= "pendente" then
-        TriggerClientEvent('QBCore:Notify', source, 'Este passaporte já foi ' .. passaporte.status .. '!', 'error')
-        TriggerClientEvent('oac:callback', source, 'approvePassport', {success = false, error = "Passaporte já processado"})
-        return
-    end
-    
-    -- Obter informações do aprovador
-    local Player = QBCore.Functions.GetPlayer(source)
-    local aprovadorNome = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
-    local aprovadorId = Player.PlayerData.citizenid
-    
-    -- Atualizar status
-    local dadosAtualizacao = {
-        status = "aprovado",
-        aprovadoPor = aprovadorId,
-        aprovadoPorNome = aprovadorNome,
-        dataAprovacao = os.date("%Y-%m-%d %H:%M:%S")
-    }
-    
-    AtualizarPassaporte(data.id, dadosAtualizacao)
-    
-    -- Registrar log
-    LogAcao(source, "aprovar_passaporte", {id = data.id, nome = passaporte.nome})
-    
-    -- Notificar cliente
-    TriggerClientEvent('QBCore:Notify', source, 'Passaporte aprovado com sucesso!', 'success')
-    
-    -- Enviar resposta ao cliente
-    TriggerClientEvent('oac:callback', source, 'approvePassport', {success = true})
-    
-    -- Adicionar item ao inventário do cidadão
-    local targetPlayer = QBCore.Functions.GetPlayerByCitizenId(passaporte.identidade)
-    if targetPlayer then
-        targetPlayer.Functions.AddItem('passaporte', 1, false, {
-            nome = passaporte.nome,
-            identidade = passaporte.identidade,
-            dataNascimento = passaporte.dataNascimento,
-            foto = passaporte.foto,
-            dataEmissao = os.date("%Y-%m-%d"),
-            dataValidade = os.date("%Y-%m-%d", os.time() + Config.TempoExpiracaoPassaporte * 24 * 60 * 60)
-        })
-        TriggerClientEvent('QBCore:Notify', targetPlayer.PlayerData.source, 'Seu passaporte foi aprovado!', 'success')
-    end
-end)
-
-RegisterNetEvent('oac:rejectPassport')
-AddEventHandler('oac:rejectPassport', function(data)
-    local source = source
-    
-    if not VerificarPermissaoAltaOrdem(source) then
-        TriggerClientEvent('QBCore:Notify', source, 'Você não tem permissão para isso!', 'error')
-        TriggerClientEvent('oac:callback', source, 'rejectPassport', {success = false, error = "Sem permissão"})
-        return
-    end
-    
-    -- Encontrar passaporte
-    local passaporte = nil
-    local index = 0
-    
-    for i, p in ipairs(Cache.Passaportes) do
-        if p.id == data.id then
-            passaporte = p
-            index = i
-            break
-        end
-    end
-    
-    if not passaporte then
-        TriggerClientEvent('QBCore:Notify', source, 'Passaporte não encontrado!', 'error')
-        TriggerClientEvent('oac:callback', source, 'rejectPassport', {success = false, error = "Passaporte não encontrado"})
-        return
-    end
-    
-    -- Verificar se já foi aprovado ou rejeitado
-    if passaporte.status ~= "pendente" then
-        TriggerClientEvent('QBCore:Notify', source, 'Este passaporte já foi ' .. passaporte.status .. '!', 'error')
-        TriggerClientEvent('oac:callback', source, 'rejectPassport', {success = false, error = "Passaporte já processado"})
-        return
-    end
-    
-    -- Obter informações do rejeitador
-    local Player = QBCore.Functions.GetPlayer(source)
-    local rejeitadorNome = Player.PlayerData.charinfo.firstname .. " " .. Player.PlayerData.charinfo.lastname
-    local rejeitadorId = Player.PlayerData.citizenid
-    
-    -- Atualizar status
-    local dadosAtualizacao = {
-        status = "rejeitado",
-        rejeitadoPor = rejeitadorId,
-        rejeitadoPorNome = rejeitadorNome,
-        dataRejeicao = os.date("%Y-%m-%d %H:%M:%S"),
-        motivoRejeicao = data.motivo or "Não especificado"
-    }
-    
-    AtualizarPassaporte(data.id, dadosAtualizacao)
-    
-    -- Registrar log
-    LogAcao(source, "rejeitar_passaporte", {id = data.id, nome = passaporte.nome, motivo = data.motivo})
-    
-    -- Notificar cliente
-    TriggerClientEvent('QBCore:Notify', source, 'Passaporte rejeitado!', 'success')
-    
-    -- Enviar resposta ao cliente
-    TriggerClientEvent('oac:callback', source, 'rejectPassport', {success = true})
-    
-    -- Notificar o cidadão
-    local targetPlayer = QBCore.Functions.GetPlayerByCitizenId(passaporte.identidade)
-    if targetPlayer then
-        TriggerClientEvent('QBCore:Notify', targetPlayer.PlayerData.source, 'Seu passaporte foi rejeitado!', 'error')
-    end
-end)
-
-RegisterNetEvent('oac:updateProfile')
-AddEventHandler('oac:updateProfile', function(data)
-    local source = source
-    local Player = QBCore.Functions.GetPlayer(source)
-    
-    if not Player then
-        TriggerClientEvent('QBCore:Notify', source, 'Erro ao obter informações do jogador!', 'error')
-        return
-    end
-    
-    -- Validar dados
-    if not data.oab then
-        TriggerClientEvent('QBCore:Notify', source, 'Dados incompletos!', 'error')
-        return
-    end
-    
-    -- Verificar se o OAB existe
-    if not Cache.Usuarios[data.oab] then
-        TriggerClientEvent('QBCore:Notify', source, 'Usuário não encontrado!', 'error')
-        return
-    end
-    
-    -- Verificar se o usuário tem permissão para atualizar este perfil
-    local usuarioAtual = Cache.Usuarios[data.oab]
-    if usuarioAtual.id ~= Player.PlayerData.citizenid and not TemPermissao(source, Config.NiveisPermissao.Diretor) then
-        TriggerClientEvent('QBCore:Notify', source, 'Você não tem permissão para atualizar este perfil!', 'error')
-        return
-    end
-    
-    -- Preparar dados para atualização
-    local dadosAtualizacao = {}
-    
-    if data.name and data.name ~= "" then
-        dadosAtualizacao.nome = data.name
-    end
-    
-    if data.email and data.email ~= "" then
-        dadosAtualizacao.email = data.email
-    end
-    
-    if data.phone and data.phone ~= "" then
-        dadosAtualizacao.telefone = data.phone
-    end
-    
-    if data.avatar and data.avatar ~= "" then
-        dadosAtualizacao.avatar = data.avatar
-    end
-    
-    -- Atualizar perfil
-    AtualizarUsuario(data.oab, dadosAtualizacao)
-    
-    -- Registrar log
-    LogAcao(source, "atualizar_perfil", {oab = data.oab, dados = dadosAtualizacao})
-    
-    -- Notificar cliente
-    TriggerClientEvent('QBCore:Notify', source, 'Perfil atualizado com sucesso!', 'success')
-    
-    -- Enviar resposta ao cliente
-    TriggerClientEvent('oac:callback', source, 'updateProfile', {success = true})
-end)
-
-RegisterNetEvent('oac:exit')
-AddEventHandler('oac:exit', function()
-    local source = source
-    TriggerClientEvent('oac:closePanel', source)
-end)
-
--- Comando para abrir o painel
-QBCore.Commands.Add('forum', 'Abrir painel do Fórum', {}, false, function(source, args)
-    local Player = QBCore.Functions.GetPlayer(source)
-    
-    if VerificarPermissaoForum(source) then
-        TriggerClientEvent('oac:openPanel', source)
-    else
-        TriggerClientEvent('QBCore:Notify', source, 'Você não tem permissão para acessar o painel do Fórum!', 'error')
-    end
-end)
-
--- Inicialização
-Citizen.CreateThread(function()
-    -- Criar tabelas no banco de dados se não existirem
-    MySQL.Async.execute([[
+    exports.oxmysql:execute([[
         CREATE TABLE IF NOT EXISTS oac_passaportes (
             id VARCHAR(50) PRIMARY KEY,
             nome VARCHAR(255) NOT NULL,
-            identidade VARCHAR(50) NOT NULL,
+            identidade VARCHAR(50) NOT NULL UNIQUE,
             data_nascimento DATE NOT NULL,
-            foto TEXT NOT NULL,
-            status VARCHAR(50) NOT NULL,
+            foto TEXT,
+            status VARCHAR(20) DEFAULT 'pendente',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             criado_por VARCHAR(50),
             criado_por_nome VARCHAR(255),
             aprovado_por VARCHAR(50),
@@ -1105,82 +323,1835 @@ Citizen.CreateThread(function()
         )
     ]])
     
-    MySQL.Async.execute([[
+    exports.oxmysql:execute([[
         CREATE TABLE IF NOT EXISTS oac_documentos (
             id VARCHAR(50) PRIMARY KEY,
             tipo VARCHAR(50) NOT NULL,
-            nome VARCHAR(255) NOT NULL,
-            identidade VARCHAR(50) NOT NULL,
-            descricao TEXT NOT NULL,
-            evidencias TEXT NOT NULL,
-            status VARCHAR(50) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            criado_por VARCHAR(50),
-            criado_por_nome VARCHAR(255),
-            assinatura TEXT
-        )
-    ]])
-    
-    MySQL.Async.execute([[
-        CREATE TABLE IF NOT EXISTS oac_leis (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            categoria VARCHAR(100) NOT NULL,
+            status VARCHAR(20) DEFAULT 'rascunho',
             titulo VARCHAR(255) NOT NULL,
-            conteudo TEXT NOT NULL
+            conteudo TEXT,
+            envolvidos TEXT,
+            autor_id VARCHAR(50) NOT NULL,
+            autor_nome VARCHAR(255) NOT NULL,
+            anexos TEXT,
+            assinatura TEXT,
+            referencias TEXT,
+            metadata TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
     ]])
     
-    MySQL.Async.execute([[
+    exports.oxmysql:execute([[
         CREATE TABLE IF NOT EXISTS oac_usuarios (
             id VARCHAR(50) NOT NULL,
             nome VARCHAR(255) NOT NULL,
             oab VARCHAR(50) PRIMARY KEY,
-            cargo VARCHAR(50) NOT NULL,
-            nivel VARCHAR(50) NOT NULL,
-            avatar TEXT NOT NULL,
-            email VARCHAR(255),
-            telefone VARCHAR(50),
+            cargo VARCHAR(50),
+            nivel VARCHAR(20) DEFAULT 'INICIANTE',
+            avatar TEXT,
+            email VARCHAR(100),
+            telefone VARCHAR(20),
             ultimo_acesso TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ]])
     
-    MySQL.Async.execute([[
+    exports.oxmysql:execute([[
         CREATE TABLE IF NOT EXISTS oac_processos (
             id VARCHAR(50) PRIMARY KEY,
-            numero VARCHAR(50) NOT NULL,
+            numero VARCHAR(50) UNIQUE,
             titulo VARCHAR(255) NOT NULL,
-            descricao TEXT NOT NULL,
-            reu VARCHAR(255) NOT NULL,
-            identidade_reu VARCHAR(50) NOT NULL,
+            descricao TEXT,
+            reu VARCHAR(255),
+            identidade_reu VARCHAR(50),
             advogado VARCHAR(50),
             promotor VARCHAR(50),
             juiz VARCHAR(50),
-            status VARCHAR(50) NOT NULL,
-            data_audiencia TIMESTAMP NULL,
+            status VARCHAR(20) DEFAULT 'aberto',
+            data_audiencia TIMESTAMP,
             documentos TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    ]])
+    
+    exports.oxmysql:execute([[
+        CREATE TABLE IF NOT EXISTS oac_logs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            player_name VARCHAR(255) NOT NULL,
+            registration VARCHAR(50) NOT NULL,
+            acao VARCHAR(50) NOT NULL,
+            dados TEXT,
+            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ]])
+    
+    -- Criar tabela para eventos do calendário
+    exports.oxmysql:execute([[
+        CREATE TABLE IF NOT EXISTS oac_calendario (
+            id VARCHAR(50) PRIMARY KEY,
+            titulo VARCHAR(255) NOT NULL,
+            descricao TEXT,
+            tipo VARCHAR(50) NOT NULL, -- audiencia, reuniao, evento
+            data_inicio TIMESTAMP NOT NULL,
+            data_fim TIMESTAMP NOT NULL,
+            local VARCHAR(255),
+            criado_por VARCHAR(50) NOT NULL,
+            criado_por_nome VARCHAR(255) NOT NULL,
+            participantes TEXT,
+            status VARCHAR(50) NOT NULL DEFAULT 'agendado', -- agendado, concluido, cancelado
+            notas TEXT,
+            documentos_relacionados TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ]])
     
-    MySQL.Async.execute([[
-        CREATE TABLE IF NOT EXISTS oac_logs (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            identifier VARCHAR(50) NOT NULL,
-            nome VARCHAR(255) NOT NULL,
-            acao VARCHAR(100) NOT NULL,
-            dados TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    -- Criar tabela para alta ordem
+    exports.oxmysql:execute([[
+        CREATE TABLE IF NOT EXISTS oac_alta_ordem (
+            id VARCHAR(50) PRIMARY KEY,
+            tipo VARCHAR(50) NOT NULL, -- decisao, sentenca, decreto
+            titulo VARCHAR(255) NOT NULL,
+            conteudo TEXT NOT NULL,
+            autor_id VARCHAR(50) NOT NULL,
+            autor_nome VARCHAR(255) NOT NULL,
+            data_efetiva TIMESTAMP,
+            status VARCHAR(50) NOT NULL DEFAULT 'ativo', -- ativo, arquivado, revogado
+            referencias TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ]])
+end
+
+-- Função para tarefas automáticas
+local function AgendarTarefasAutomaticas()
+    -- Esta função é chamada durante a inicialização e configura tarefas periódicas
+    
+    -- Sincronizar dados com clientes a cada 10 minutos
+    Citizen.CreateThread(function()
+        while true do
+            Citizen.Wait(10 * 60 * 1000)
+            SincronizarDadosComClientes()
+        end
+    end)
+    
+    -- Limpar cache a cada 2 horas
+    Citizen.CreateThread(function()
+        while true do
+            Citizen.Wait(2 * 60 * 60 * 1000)
+            LogInfo("Limpando cache...")
+            
+            -- Recarregar dados do banco de dados
+            CarregarLeis()
+            CarregarPassaportes()
+            CarregarDocumentos()
+            CarregarUsuarios()
+            CarregarProcessos()
+            CarregarEventosCalendario()
+            CarregarDecisoesAltaOrdem()
+            
+            LogInfo("Cache limpo e recarregado.")
+        end
+    end)
+end
+
+-- Função para sincronizar dados com clientes
+local function SincronizarDadosComClientes()
+    LogInfo("Sincronizando dados com clientes...")
+    
+    -- Obter dados recentes para sincronização
+    local eventosRecentes = {}
+    local decisoesRecentes = {}
+    
+    -- Buscar eventos próximos
+    local dataAtual = os.date("%Y-%m-%d %H:%M:%S")
+    local result = exports.oxmysql:executeSync([[
+        SELECT * FROM oac_calendario 
+        WHERE data_inicio > ? AND status = 'agendado' 
+        ORDER BY data_inicio ASC LIMIT 5
+    ]], {dataAtual})
+    
+    if result and #result > 0 then
+        eventosRecentes = result
+    end
+    
+    -- Buscar decisões recentes da alta ordem
+    result = exports.oxmysql:executeSync([[
+        SELECT * FROM oac_alta_ordem 
+        WHERE status = 'ativo' 
+        ORDER BY created_at DESC LIMIT 5
+    ]])
+    
+    if result and #result > 0 then
+        decisoesRecentes = result
+    end
+    
+    -- Enviar dados para todos os clientes que têm permissão
+    local players = GetPlayers()
+    for _, playerId in ipairs(players) do
+        if VerificarPermissaoForum(tonumber(playerId)) then
+            TriggerClientEvent('oac:syncData', tonumber(playerId), {
+                eventos = eventosRecentes,
+                decisoes = decisoesRecentes,
+                timestamp = os.time()
+            })
+        end
+    end
+    
+    LogInfo("Dados sincronizados com " .. #players .. " clientes.")
+end
+
+-- ====================================================
+-- Sistema de Consultas - Sincronização com MySQL
+-- ====================================================
+
+-- Função para buscar documentos diretamente no banco de dados (sem cache)
+local function BuscarDocumentosBD(filtros, pagina, porPagina)
+    -- Inicializar parâmetros e valores para consulta SQL
+    local where = {}
+    local params = {}
+    local sql = "SELECT * FROM oac_documentos WHERE 1=1"
+    
+    -- Adicionar filtros à consulta
+    if filtros then
+        if filtros.tipo then
+            table.insert(where, "tipo = ?")
+            table.insert(params, filtros.tipo)
+        end
+        
+        if filtros.status then
+            table.insert(where, "status = ?")
+            table.insert(params, filtros.status)
+        end
+        
+        if filtros.autor_id then
+            table.insert(where, "autor_id = ?")
+            table.insert(params, filtros.autor_id)
+        end
+        
+        if filtros.texto then
+            table.insert(where, "(titulo LIKE ? OR conteudo LIKE ?)")
+            table.insert(params, "%" .. filtros.texto .. "%")
+            table.insert(params, "%" .. filtros.texto .. "%")
+        end
+        
+        if filtros.data_inicio then
+            table.insert(where, "created_at >= ?")
+            table.insert(params, filtros.data_inicio)
+        end
+        
+        if filtros.data_fim then
+            table.insert(where, "created_at <= ?")
+            table.insert(params, filtros.data_fim)
+        end
+        
+        -- Filtro para documentos que mencionam uma identidade específica
+        if filtros.identidade then
+            table.insert(where, "(envolvidos LIKE ? OR conteudo LIKE ?)")
+            table.insert(params, "%" .. filtros.identidade .. "%")
+            table.insert(params, "%" .. filtros.identidade .. "%")
+        end
+    end
+    
+    -- Montar cláusula WHERE
+    if #where > 0 then
+        sql = sql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    -- Contar total de resultados (para paginação)
+    local countSql = "SELECT COUNT(*) as total FROM oac_documentos WHERE 1=1"
+    if #where > 0 then
+        countSql = countSql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    local countResult = exports.oxmysql:executeSync(countSql, params)
+    local total = countResult[1].total
+    
+    -- Adicionar ordenação e paginação
+    sql = sql .. " ORDER BY updated_at DESC"
+    
+    -- Calcular offset para paginação
+    local offset = (pagina - 1) * porPagina
+    sql = sql .. string.format(" LIMIT %d, %d", offset, porPagina)
+    
+    -- Executar consulta
+    local result = exports.oxmysql:executeSync(sql, params)
+    
+    -- Calcular total de páginas
+    local totalPaginas = math.ceil(total / porPagina)
+    
+    return {
+        documentos = result or {},
+        total = total,
+        pagina = pagina,
+        porPagina = porPagina,
+        totalPaginas = totalPaginas
+    }
+end
+
+-- Função para buscar passaportes diretamente no banco de dados (sem cache)
+local function BuscarPassaportesBD(filtros, pagina, porPagina)
+    -- Inicializar parâmetros e valores para consulta SQL
+    local where = {}
+    local params = {}
+    local sql = "SELECT * FROM oac_passaportes WHERE 1=1"
+    
+    -- Adicionar filtros à consulta
+    if filtros then
+        if filtros.status then
+            table.insert(where, "status = ?")
+            table.insert(params, filtros.status)
+        end
+        
+        if filtros.nome then
+            table.insert(where, "nome LIKE ?")
+            table.insert(params, "%" .. filtros.nome .. "%")
+        end
+        
+        if filtros.identidade then
+            table.insert(where, "identidade = ?")
+            table.insert(params, filtros.identidade)
+        end
+        
+        if filtros.data_inicio then
+            table.insert(where, "created_at >= ?")
+            table.insert(params, filtros.data_inicio)
+        end
+        
+        if filtros.data_fim then
+            table.insert(where, "created_at <= ?")
+            table.insert(params, filtros.data_fim)
+        end
+    end
+    
+    -- Montar cláusula WHERE
+    if #where > 0 then
+        sql = sql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    -- Contar total de resultados (para paginação)
+    local countSql = "SELECT COUNT(*) as total FROM oac_passaportes WHERE 1=1"
+    if #where > 0 then
+        countSql = countSql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    local countResult = exports.oxmysql:executeSync(countSql, params)
+    local total = countResult[1].total
+    
+    -- Adicionar ordenação e paginação
+    sql = sql .. " ORDER BY created_at DESC"
+    
+    -- Calcular offset para paginação
+    local offset = (pagina - 1) * porPagina
+    sql = sql .. string.format(" LIMIT %d, %d", offset, porPagina)
+    
+    -- Executar consulta
+    local result = exports.oxmysql:executeSync(sql, params)
+    
+    -- Calcular total de páginas
+    local totalPaginas = math.ceil(total / porPagina)
+    
+    return {
+        passaportes = result or {},
+        total = total,
+        pagina = pagina,
+        porPagina = porPagina,
+        totalPaginas = totalPaginas
+    }
+end
+
+-- Função para buscar eventos do calendário no banco de dados
+local function BuscarEventosBD(filtros, pagina, porPagina)
+    -- Inicializar parâmetros e valores para consulta SQL
+    local where = {}
+    local params = {}
+    local sql = "SELECT * FROM oac_calendario WHERE 1=1"
+    
+    -- Adicionar filtros à consulta
+    if filtros then
+        if filtros.tipo then
+            table.insert(where, "tipo = ?")
+            table.insert(params, filtros.tipo)
+        end
+        
+        if filtros.status then
+            table.insert(where, "status = ?")
+            table.insert(params, filtros.status)
+        end
+        
+        if filtros.titulo then
+            table.insert(where, "titulo LIKE ?")
+            table.insert(params, "%" .. filtros.titulo .. "%")
+        end
+        
+        if filtros.data_inicio then
+            table.insert(where, "data_inicio >= ?")
+            table.insert(params, filtros.data_inicio)
+        end
+        
+        if filtros.data_fim then
+            table.insert(where, "data_fim <= ?")
+            table.insert(params, filtros.data_fim)
+        end
+        
+        if filtros.participante then
+            table.insert(where, "participantes LIKE ?")
+            table.insert(params, "%" .. filtros.participante .. "%")
+        end
+    end
+    
+    -- Montar cláusula WHERE
+    if #where > 0 then
+        sql = sql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    -- Contar total de resultados (para paginação)
+    local countSql = "SELECT COUNT(*) as total FROM oac_calendario WHERE 1=1"
+    if #where > 0 then
+        countSql = countSql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    local countResult = exports.oxmysql:executeSync(countSql, params)
+    local total = countResult[1].total
+    
+    -- Adicionar ordenação e paginação
+    sql = sql .. " ORDER BY data_inicio ASC"
+    
+    -- Calcular offset para paginação
+    local offset = (pagina - 1) * porPagina
+    sql = sql .. string.format(" LIMIT %d, %d", offset, porPagina)
+    
+    -- Executar consulta
+    local result = exports.oxmysql:executeSync(sql, params)
+    
+    -- Calcular total de páginas
+    local totalPaginas = math.ceil(total / porPagina)
+    
+    return {
+        eventos = result or {},
+        total = total,
+        pagina = pagina,
+        porPagina = porPagina,
+        totalPaginas = totalPaginas
+    }
+end
+
+-- Função para buscar decisões da alta ordem no banco de dados
+local function BuscarDecisoesAltaOrdemBD(filtros, pagina, porPagina)
+    -- Inicializar parâmetros e valores para consulta SQL
+    local where = {}
+    local params = {}
+    local sql = "SELECT * FROM oac_alta_ordem WHERE 1=1"
+    
+    -- Adicionar filtros à consulta
+    if filtros then
+        if filtros.tipo then
+            table.insert(where, "tipo = ?")
+            table.insert(params, filtros.tipo)
+        end
+        
+        if filtros.status then
+            table.insert(where, "status = ?")
+            table.insert(params, filtros.status)
+        end
+        
+        if filtros.titulo then
+            table.insert(where, "titulo LIKE ?")
+            table.insert(params, "%" .. filtros.titulo .. "%")
+        end
+        
+        if filtros.texto then
+            table.insert(where, "(titulo LIKE ? OR conteudo LIKE ?)")
+            table.insert(params, "%" .. filtros.texto .. "%")
+            table.insert(params, "%" .. filtros.texto .. "%")
+        end
+        
+        if filtros.autor_id then
+            table.insert(where, "autor_id = ?")
+            table.insert(params, filtros.autor_id)
+        end
+        
+        if filtros.data_inicio then
+            table.insert(where, "created_at >= ?")
+            table.insert(params, filtros.data_inicio)
+        end
+        
+        if filtros.data_fim then
+            table.insert(where, "created_at <= ?")
+            table.insert(params, filtros.data_fim)
+        end
+    end
+    
+    -- Montar cláusula WHERE
+    if #where > 0 then
+        sql = sql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    -- Contar total de resultados (para paginação)
+    local countSql = "SELECT COUNT(*) as total FROM oac_alta_ordem WHERE 1=1"
+    if #where > 0 then
+        countSql = countSql .. " AND " .. table.concat(where, " AND ")
+    end
+    
+    local countResult = exports.oxmysql:executeSync(countSql, params)
+    local total = countResult[1].total
+    
+    -- Adicionar ordenação e paginação
+    sql = sql .. " ORDER BY updated_at DESC"
+    
+    -- Calcular offset para paginação
+    local offset = (pagina - 1) * porPagina
+    sql = sql .. string.format(" LIMIT %d, %d", offset, porPagina)
+    
+    -- Executar consulta
+    local result = exports.oxmysql:executeSync(sql, params)
+    
+    -- Calcular total de páginas
+    local totalPaginas = math.ceil(total / porPagina)
+    
+    return {
+        decisoes = result or {},
+        total = total,
+        pagina = pagina,
+        porPagina = porPagina,
+        totalPaginas = totalPaginas
+    }
+end
+
+-- ====================================================
+-- Callbacks para Creative Framework - Sistema de documentos
+-- ====================================================
+
+-- Função para registrar callbacks no Creative Framework
+local function RegisterCreativeCallback(name, callback)
+    RegisterServerEvent(name)
+    AddEventHandler(name, function(...)
+        local source = source
+        local args = {...}
+        
+        -- O último argumento é uma função de callback
+        local cbFunction = args[#args]
+        table.remove(args, #args)
+        
+        -- Executar callback com argumento adicional para resposta
+        local result = callback(source, table.unpack(args))
+        
+        -- Enviar resultado de volta ao cliente
+        cbFunction(result)
+    end)
+end
+
+-- Callback para consultar documentos
+RegisterCreativeCallback("oac:consultarDocumentos", function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Parâmetros de paginação e filtros
+    local pagina = data and data.pagina or 1
+    local porPagina = data and data.porPagina or 10
+    local filtros = data and data.filtros or {}
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_documentos", {
+        filtros = filtros,
+        pagina = pagina
+    })
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarDocumentosBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        documentos = resultado.documentos,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para consultar um documento específico
+RegisterCreativeCallback("oac:consultarDocumento", function(source, id)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    if not id then
+        return {success = false, error = "ID não fornecido"}
+    end
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_documento", {
+        id = id
+    })
+    
+    -- Buscar do banco de dados
+    local result = exports.oxmysql:executeSync("SELECT * FROM oac_documentos WHERE id = ?", {id})
+    
+    if result and #result > 0 then
+        return {success = true, documento = result[1]}
+    else
+        return {success = false, error = "Documento não encontrado"}
+    end
+end)
+
+-- Callback para consulta avançada de documentos
+RegisterCreativeCallback("oac:consultaAvancada", function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    if not data or not data.query or data.query == "" then
+        return {success = false, error = "Consulta inválida"}
+    end
+    
+    -- Parâmetros de paginação
+    local pagina = data.pagina or 1
+    local porPagina = data.porPagina or 10
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consulta_avancada", {
+        query = data.query,
+        pagina = pagina
+    })
+    
+    -- Preparar filtros para a consulta
+    local filtros = {
+        texto = data.query
+    }
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarDocumentosBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        documentos = resultado.documentos,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para consultar documentos por identidade
+RegisterCreativeCallback("oac:consultarDocumentosPorIdentidade", function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    if not data or not data.identidade then
+        return {success = false, error = "Identidade não fornecida"}
+    end
+    
+    -- Parâmetros de paginação
+    local pagina = data.pagina or 1
+    local porPagina = data.porPagina or 10
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_documentos_por_identidade", {
+        identidade = data.identidade,
+        pagina = pagina
+    })
+    
+    -- Preparar filtros para a consulta
+    local filtros = {
+        identidade = data.identidade
+    }
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarDocumentosBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        documentos = resultado.documentos,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para consultar estatísticas de documentos
+RegisterCreativeCallback("oac:consultarEstatisticasDocumentos", function(source)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_estatisticas_documentos", {})
+    
+    -- Buscar estatísticas do banco de dados
+    local result = exports.oxmysql:executeSync([[
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'rascunho' THEN 1 ELSE 0 END) as rascunhos,
+            SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END) as pendentes,
+            SUM(CASE WHEN status = 'assinado' THEN 1 ELSE 0 END) as assinados,
+            SUM(CASE WHEN status = 'arquivado' THEN 1 ELSE 0 END) as arquivados,
+            COUNT(DISTINCT autor_id) as autores,
+            DATE_FORMAT(MAX(created_at), '%Y-%m-%d') as ultimo_criado,
+            DATE_FORMAT(MAX(updated_at), '%Y-%m-%d') as ultimo_atualizado
+        FROM oac_documentos
+    ]])
+    
+    -- Obter estatísticas por tipo de documento
+    local tiposResult = exports.oxmysql:executeSync([[
+        SELECT 
+            tipo,
+            COUNT(*) as total
+        FROM oac_documentos
+        GROUP BY tipo
+        ORDER BY total DESC
+    ]])
+    
+    local estatisticas = {
+        geral = result[1],
+        porTipo = tiposResult
+    }
+    
+    return {
+        success = true,
+        estatisticas = estatisticas
+    }
+end)
+
+-- Callback para consultar passaportes
+RegisterCreativeCallback("oac:consultarPassaportes", function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Parâmetros de paginação e filtros
+    local pagina = data and data.pagina or 1
+    local porPagina = data and data.porPagina or 10
+    local filtros = data and data.filtros or {}
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_passaportes", {
+        filtros = filtros,
+        pagina = pagina
+    })
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarPassaportesBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        passaportes = resultado.passaportes,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para consultar passaportes pendentes (alta ordem)
+RegisterCreativeCallback("oac:consultarPassaportesPendentes", function(source, data)
+    if not VerificarPermissaoAltaOrdem(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Parâmetros de paginação
+    local pagina = data and data.pagina or 1
+    local porPagina = data and data.porPagina or 10
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_passaportes_pendentes", {
+        pagina = pagina
+    })
+    
+    -- Preparar filtros para a consulta
+    local filtros = {
+        status = "pendente"
+    }
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarPassaportesBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        passaportes = resultado.passaportes,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para estatísticas de passaportes
+RegisterCreativeCallback("oac:consultarEstatisticasPassaportes", function(source)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_estatisticas_passaportes", {})
+    
+    -- Buscar estatísticas do banco de dados
+    local result = exports.oxmysql:executeSync([[
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END) as pendentes,
+            SUM(CASE WHEN status = 'aprovado' THEN 1 ELSE 0 END) as aprovados,
+            SUM(CASE WHEN status = 'rejeitado' THEN 1 ELSE 0 END) as rejeitados,
+            DATE_FORMAT(MAX(created_at), '%Y-%m-%d') as ultimo_criado,
+            DATE_FORMAT(MAX(updated_at), '%Y-%m-%d') as ultimo_atualizado
+        FROM oac_passaportes
+    ]])
+    
+    return {
+        success = true,
+        estatisticas = result[1]
+    }
+end)
+
+-- Callback para obter informações do jogador
+RegisterCreativeCallback("oac:getPlayerInfo", function(source, data)
+    local user_id = vRP.getUserId(source)
+    if not user_id then 
+        return {success = false, error = "Usuário não encontrado"}
+    end
+    
+    -- Obter identidade do jogador
+    local identity = vRP.userIdentity(user_id)
+    if not identity then
+        return {success = false, error = "Identidade não encontrada"}
+    end
+    
+    -- Verificar permissões
+    local nivelPermissao = ObterNivelPermissao(source)
+    local permissoes = {
+        forum = VerificarPermissaoForum(source),
+        altaOrdem = VerificarPermissaoAltaOrdem(source),
+        nivel = nivelPermissao
+    }
+    
+    -- Formatar nome completo
+    local nomeCompleto = identity.name .. " " .. identity.name2
+    
+    -- Verificar se já possui registro na OAB
+    local oabResult = exports.oxmysql:executeSync("SELECT * FROM oac_usuarios WHERE id = ?", {user_id})
+    local registroOAB = nil
+    
+    if oabResult and #oabResult > 0 then
+        registroOAB = oabResult[1]
+        
+        -- Atualizar último acesso
+        exports.oxmysql:execute("UPDATE oac_usuarios SET ultimo_acesso = NOW() WHERE id = ?", {user_id})
+    end
+    
+    -- Preparar resposta
+    local playerInfo = {
+        success = true,
+        user_id = user_id,
+        name = identity.name,
+        firstname = identity.name,
+        lastname = identity.name2,
+        fullname = nomeCompleto,
+        dob = identity.birth,
+        registration = identity.registration,
+        phone = identity.phone,
+        permissions = permissoes,
+        oab = registroOAB
+    }
+    
+    return playerInfo
+end)
+
+-- ====================================================
+-- Eventos para documentos e passaportes
+-- ====================================================
+
+-- Evento para criar documento
+RegisterServerEvent('oac:createDocumento')
+AddEventHandler('oac:createDocumento', function(data)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoForum(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para criar documentos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createDocumento', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar dados obrigatórios
+    if not data.tipo or not data.titulo or data.titulo == "" then
+        TriggerClientEvent('Notify', source, 'negado', 'Título e tipo são obrigatórios!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createDocumento', {success = false, error = "Dados inválidos"})
+        return
+    end
+    
+    -- Obter informações do jogador
+    local user_id = vRP.getUserId(source)
+    local identity = vRP.userIdentity(user_id)
+    
+    if not identity then
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao obter dados do jogador!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createDocumento', {success = false, error = "Erro de identidade"})
+        return
+    end
+    
+    -- Gerar ID único para o documento
+    local id = GerarId()
+    
+    -- Preparar dados para inserção
+    local documentoData = {
+        id = id,
+        tipo = data.tipo,
+        status = data.status or "rascunho",
+        titulo = data.titulo,
+        conteudo = data.conteudo or "",
+        envolvidos = data.envolvidos and json.encode(data.envolvidos) or "[]",
+        autor_id = tostring(user_id),
+        autor_nome = identity.name .. " " .. identity.name2,
+        anexos = data.anexos and json.encode(data.anexos) or "[]",
+        assinatura = data.assinatura and json.encode(data.assinatura) or "[]",
+        referencias = data.referencias and json.encode(data.referencias) or "[]",
+        metadata = data.metadata and json.encode(data.metadata) or "{}"
+    }
+    
+    -- Inserir no banco de dados
+    local success = exports.oxmysql:execute([[
+        INSERT INTO oac_documentos 
+        (id, tipo, status, titulo, conteudo, envolvidos, autor_id, autor_nome, anexos, assinatura, referencias, metadata) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], {
+        documentoData.id,
+        documentoData.tipo,
+        documentoData.status,
+        documentoData.titulo,
+        documentoData.conteudo,
+        documentoData.envolvidos,
+        documentoData.autor_id,
+        documentoData.autor_nome,
+        documentoData.anexos,
+        documentoData.assinatura,
+        documentoData.referencias,
+        documentoData.metadata
+    })
+    
+    -- Verificar resultado
+    if success then
+        -- Adicionar ao cache
+        table.insert(Cache.Documentos, 1, documentoData)
+        
+        -- Registrar log
+        LogAcao(source, "criar_documento", {
+            id = id,
+            tipo = data.tipo,
+            titulo = data.titulo
+        })
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Documento criado com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createDocumento', {
+            success = true,
+            message = "Documento criado com sucesso",
+            id = id
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao criar documento no banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createDocumento', {
+            success = false,
+            error = "Erro ao criar documento no banco de dados"
+        })
+    end
+end)
+
+-- Evento para atualizar documento
+RegisterServerEvent('oac:updateDocumento')
+AddEventHandler('oac:updateDocumento', function(id, data)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoForum(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para atualizar documentos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar ID
+    if not id then
+        TriggerClientEvent('Notify', source, 'negado', 'ID do documento não fornecido!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {success = false, error = "ID não fornecido"})
+        return
+    end
+    
+    -- Verificar se o documento existe
+    local docResult = exports.oxmysql:executeSync("SELECT * FROM oac_documentos WHERE id = ?", {id})
+    
+    if not docResult or #docResult == 0 then
+        TriggerClientEvent('Notify', source, 'negado', 'Documento não encontrado!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {success = false, error = "Documento não encontrado"})
+        return
+    end
+    
+    -- Verificar se o usuário é o autor (ou tem permissão alta)
+    local user_id = vRP.getUserId(source)
+    local nivelPermissao = ObterNivelPermissao(source)
+    
+    if docResult[1].autor_id ~= tostring(user_id) and nivelPermissao < Config.NiveisPermissao.Diretor then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para editar este documento!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {success = false, error = "Sem permissão de autor"})
+        return
+    end
+    
+    -- Preparar campos para atualização
+    local campos = {}
+    local valores = {}
+    
+    if data.tipo then
+        table.insert(campos, "tipo = ?")
+        table.insert(valores, data.tipo)
+    end
+    
+    if data.status then
+        table.insert(campos, "status = ?")
+        table.insert(valores, data.status)
+    end
+    
+    if data.titulo then
+        table.insert(campos, "titulo = ?")
+        table.insert(valores, data.titulo)
+    end
+    
+    if data.conteudo ~= nil then
+        table.insert(campos, "conteudo = ?")
+        table.insert(valores, data.conteudo)
+    end
+    
+    if data.envolvidos then
+        table.insert(campos, "envolvidos = ?")
+        table.insert(valores, json.encode(data.envolvidos))
+    end
+    
+    if data.anexos then
+        table.insert(campos, "anexos = ?")
+        table.insert(valores, json.encode(data.anexos))
+    end
+    
+    if data.assinatura then
+        table.insert(campos, "assinatura = ?")
+        table.insert(valores, json.encode(data.assinatura))
+    end
+    
+    if data.referencias then
+        table.insert(campos, "referencias = ?")
+        table.insert(valores, json.encode(data.referencias))
+    end
+    
+    if data.metadata then
+        table.insert(campos, "metadata = ?")
+        table.insert(valores, json.encode(data.metadata))
+    end
+    
+    -- Se não há campos para atualizar
+    if #campos == 0 then
+        TriggerClientEvent('Notify', source, 'negado', 'Nenhum dado para atualizar!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {success = false, error = "Sem dados para atualizar"})
+        return
+    end
+    
+    -- Adicionar ID para a cláusula WHERE
+    table.insert(valores, id)
+    
+    -- Executar atualização
+    local success = exports.oxmysql:execute(
+        "UPDATE oac_documentos SET " .. table.concat(campos, ", ") .. " WHERE id = ?",
+        valores
+    )
+    
+    -- Verificar resultado
+    if success then
+        -- Atualizar cache
+        for i, doc in ipairs(Cache.Documentos) do
+            if doc.id == id then
+                -- Atualizar campos no cache
+                for field, value in pairs(data) do
+                    if field == "envolvidos" or field == "anexos" or field == "assinatura" or field == "referencias" or field == "metadata" then
+                        Cache.Documentos[i][field] = json.encode(value)
+                    else
+                        Cache.Documentos[i][field] = value
+                    end
+                end
+                break
+            end
+        end
+        
+        -- Registrar log
+        LogAcao(source, "atualizar_documento", {
+            id = id,
+            campos_atualizados = campos
+        })
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Documento atualizado com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {
+            success = true,
+            message = "Documento atualizado com sucesso"
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao atualizar documento no banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateDocumento', {
+            success = false,
+            error = "Erro ao atualizar documento no banco de dados"
+        })
+    end
+end)
+
+-- Evento para excluir documento
+RegisterServerEvent('oac:deleteDocumento')
+AddEventHandler('oac:deleteDocumento', function(id)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoForum(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para excluir documentos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar ID
+    if not id then
+        TriggerClientEvent('Notify', source, 'negado', 'ID do documento não fornecido!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {success = false, error = "ID não fornecido"})
+        return
+    end
+    
+    -- Verificar se o documento existe
+    local docResult = exports.oxmysql:executeSync("SELECT * FROM oac_documentos WHERE id = ?", {id})
+    
+    if not docResult or #docResult == 0 then
+        TriggerClientEvent('Notify', source, 'negado', 'Documento não encontrado!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {success = false, error = "Documento não encontrado"})
+        return
+    end
+    
+    -- Verificar se o usuário é o autor (ou tem permissão alta)
+    local user_id = vRP.getUserId(source)
+    local nivelPermissao = ObterNivelPermissao(source)
+    
+    if docResult[1].autor_id ~= tostring(user_id) and nivelPermissao < Config.NiveisPermissao.Diretor then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para excluir este documento!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {success = false, error = "Sem permissão de autor"})
+        return
+    end
+    
+    -- Executar exclusão
+    local success = exports.oxmysql:execute("DELETE FROM oac_documentos WHERE id = ?", {id})
+    
+    -- Verificar resultado
+    if success then
+        -- Atualizar cache
+        for i, doc in ipairs(Cache.Documentos) do
+            if doc.id == id then
+                table.remove(Cache.Documentos, i)
+                break
+            end
+        end
+        
+        -- Registrar log
+        LogAcao(source, "excluir_documento", {
+            id = id,
+            titulo = docResult[1].titulo
+        })
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Documento excluído com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {
+            success = true,
+            message = "Documento excluído com sucesso"
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao excluir documento do banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'deleteDocumento', {
+            success = false,
+            error = "Erro ao excluir documento do banco de dados"
+        })
+    end
+end)
+
+-- Evento para assinar documento
+RegisterServerEvent('oac:signDocumento')
+AddEventHandler('oac:signDocumento', function(id, assinatura)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoForum(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para assinar documentos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar ID e assinatura
+    if not id or not assinatura then
+        TriggerClientEvent('Notify', source, 'negado', 'ID do documento ou assinatura não fornecidos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {success = false, error = "Dados inválidos"})
+        return
+    end
+    
+    -- Verificar se o documento existe
+    local docResult = exports.oxmysql:executeSync("SELECT * FROM oac_documentos WHERE id = ?", {id})
+    
+    if not docResult or #docResult == 0 then
+        TriggerClientEvent('Notify', source, 'negado', 'Documento não encontrado!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {success = false, error = "Documento não encontrado"})
+        return
+    end
+    
+    -- Obter informações do jogador
+    local user_id = vRP.getUserId(source)
+    local identity = vRP.userIdentity(user_id)
+    
+    if not identity then
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao obter dados do jogador!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {success = false, error = "Erro de identidade"})
+        return
+    end
+    
+    -- Preparar dados da assinatura
+    local assinaturaData = {
+        id = user_id,
+        nome = identity.name .. " " .. identity.name2,
+        registration = identity.registration,
+        data = os.date("%Y-%m-%d %H:%M:%S"),
+        texto = assinatura.texto or "",
+        cargo = assinatura.cargo or "",
+        tipo = assinatura.tipo or "normal"
+    }
+    
+    -- Obter assinaturas existentes
+    local assinaturasAtuais = json.decode(docResult[1].assinatura or "[]")
+    
+    -- Verificar se já assinou
+    for _, assina in ipairs(assinaturasAtuais) do
+        if assina.id == assinaturaData.id then
+            TriggerClientEvent('Notify', source, 'negado', 'Você já assinou este documento!', 5000)
+            TriggerClientEvent('oac:callback', source, 'signDocumento', {success = false, error = "Já assinado"})
+            return
+        end
+    end
+    
+    -- Adicionar nova assinatura
+    table.insert(assinaturasAtuais, assinaturaData)
+    
+    -- Atualizar status do documento para "assinado"
+    local status = "assinado"
+    
+    -- Executar atualização
+    local success = exports.oxmysql:execute([[
+        UPDATE oac_documentos 
+        SET assinatura = ?, status = ? 
+        WHERE id = ?
+    ]], {
+        json.encode(assinaturasAtuais),
+        status,
+        id
+    })
+    
+    -- Verificar resultado
+    if success then
+        -- Atualizar cache
+        for i, doc in ipairs(Cache.Documentos) do
+            if doc.id == id then
+                Cache.Documentos[i].assinatura = json.encode(assinaturasAtuais)
+                Cache.Documentos[i].status = status
+                break
+            end
+        end
+        
+        -- Registrar log
+        LogAcao(source, "assinar_documento", {
+            id = id,
+            titulo = docResult[1].titulo
+        })
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Documento assinado com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {
+            success = true,
+            message = "Documento assinado com sucesso"
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao assinar documento!', 5000)
+        TriggerClientEvent('oac:callback', source, 'signDocumento', {
+            success = false,
+            error = "Erro ao assinar documento no banco de dados"
+        })
+    end
+end)
+
+-- ====================================================
+-- Eventos para Alta Ordem e Calendário
+-- ====================================================
+
+-- Callback para buscar eventos do calendário
+RegisterCreativeCallback('oac:consultarEventosCalendario', function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Parâmetros de paginação e filtros
+    local pagina = data and data.pagina or 1
+    local porPagina = data and data.porPagina or 10
+    local filtros = data and data.filtros or {}
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_eventos_calendario", {
+        filtros = filtros,
+        pagina = pagina
+    })
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarEventosBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        eventos = resultado.eventos,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para buscar eventos próximos do calendário
+RegisterCreativeCallback('oac:consultarEventosProximos', function(source)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Obter data atual
+    local dataAtual = os.date("%Y-%m-%d %H:%M:%S")
+    
+    -- Filtrar eventos que ainda não ocorreram
+    local filtros = {
+        data_inicio = dataAtual,
+        status = "agendado"
+    }
+    
+    -- Buscar próximos 5 eventos
+    local resultado = BuscarEventosBD(filtros, 1, 5)
+    
+    return {
+        success = true,
+        eventos = resultado.eventos,
+        total = resultado.total
+    }
+end)
+
+-- Callback para buscar decisões da alta ordem
+RegisterCreativeCallback('oac:consultarDecisoesAltaOrdem', function(source, data)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Parâmetros de paginação e filtros
+    local pagina = data and data.pagina or 1
+    local porPagina = data and data.porPagina or 10
+    local filtros = data and data.filtros or {}
+    
+    -- Registrar log da consulta
+    LogAcao(source, "consultar_decisoes_alta_ordem", {
+        filtros = filtros,
+        pagina = pagina
+    })
+    
+    -- Buscar do banco de dados
+    local resultado = BuscarDecisoesAltaOrdemBD(filtros, pagina, porPagina)
+    
+    return {
+        success = true,
+        decisoes = resultado.decisoes,
+        total = resultado.total,
+        pagina = resultado.pagina,
+        totalPaginas = resultado.totalPaginas
+    }
+end)
+
+-- Callback para buscar decisões recentes da alta ordem
+RegisterCreativeCallback('oac:consultarDecisoesRecentes', function(source)
+    if not VerificarPermissaoForum(source) then
+        return {success = false, error = "Sem permissão"}
+    end
+    
+    -- Buscar últimas 5 decisões ativas
+    local filtros = {
+        status = "ativo"
+    }
+    
+    -- Buscar decisões recentes
+    local resultado = BuscarDecisoesAltaOrdemBD(filtros, 1, 5)
+    
+    return {
+        success = true,
+        decisoes = resultado.decisoes,
+        total = resultado.total
+    }
+end)
+
+-- ====================================================
+-- Eventos para Alta Ordem e Calendário
+-- ====================================================
+
+-- Evento para criar evento no calendário
+RegisterServerEvent('oac:createCalendarEvent')
+AddEventHandler('oac:createCalendarEvent', function(data)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoAltaOrdem(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para criar eventos no calendário!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createCalendarEvent', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar dados
+    if not data.titulo or not data.tipo or not data.dataInicio or not data.dataFim then
+        TriggerClientEvent('Notify', source, 'negado', 'Dados incompletos para criação do evento!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createCalendarEvent', {success = false, error = "Dados incompletos"})
+        return
+    end
+    
+    -- Obter informações do jogador
+    local user_id = vRP.getUserId(source)
+    local identity = vRP.userIdentity(user_id)
+    
+    if not identity then
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao obter dados do jogador!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createCalendarEvent', {success = false, error = "Erro de identidade"})
+        return
+    end
+    
+    -- Gerar ID único para o evento
+    local id = GerarId()
+    
+    -- Preparar dados para inserção
+    local eventoData = {
+        id = id,
+        titulo = data.titulo,
+        descricao = data.descricao or "",
+        tipo = data.tipo,
+        data_inicio = data.dataInicio,
+        data_fim = data.dataFim,
+        local = data.local or "",
+        criado_por = tostring(user_id),
+        criado_por_nome = identity.name .. " " .. identity.name2,
+        participantes = data.participantes and json.encode(data.participantes) or "[]",
+        status = data.status or "agendado",
+        notas = data.notas or "",
+        documentos_relacionados = data.documentos_relacionados and json.encode(data.documentos_relacionados) or "[]"
+    }
+    
+    -- Inserir no banco de dados
+    local success = exports.oxmysql:execute([[
+        INSERT INTO oac_calendario 
+        (id, titulo, descricao, tipo, data_inicio, data_fim, local, criado_por, criado_por_nome, participantes, status, notas, documentos_relacionados) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], {
+        eventoData.id,
+        eventoData.titulo,
+        eventoData.descricao,
+        eventoData.tipo,
+        eventoData.data_inicio,
+        eventoData.data_fim,
+        eventoData.local,
+        eventoData.criado_por,
+        eventoData.criado_por_nome,
+        eventoData.participantes,
+        eventoData.status,
+        eventoData.notas,
+        eventoData.documentos_relacionados
+    })
+    
+    -- Verificar resultado
+    if success then
+        -- Adicionar ao cache
+        table.insert(Cache.Calendario, 1, eventoData)
+        
+        -- Registrar log
+        LogAcao(source, "criar_evento_calendario", {
+            id = id,
+            titulo = data.titulo,
+            tipo = data.tipo,
+            dataInicio = data.dataInicio
+        })
+        
+        -- Notificar participantes
+        NotificarParticipantesEvento(eventoData)
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Evento criado com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createCalendarEvent', {
+            success = true,
+            message = "Evento criado com sucesso",
+            id = id
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao criar evento no banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createCalendarEvent', {
+            success = false,
+            error = "Erro ao criar evento no banco de dados"
+        })
+    end
+end)
+
+-- Evento para atualizar evento no calendário
+RegisterServerEvent('oac:updateCalendarEvent')
+AddEventHandler('oac:updateCalendarEvent', function(data)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoAltaOrdem(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para atualizar eventos!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateCalendarEvent', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar dados
+    if not data.id then
+        TriggerClientEvent('Notify', source, 'negado', 'ID do evento não fornecido!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateCalendarEvent', {success = false, error = "ID não fornecido"})
+        return
+    end
+    
+    -- Preparar campos para atualização
+    local campos = {}
+    local valores = {}
+    
+    if data.titulo then
+        table.insert(campos, "titulo = ?")
+        table.insert(valores, data.titulo)
+    end
+    
+    if data.descricao then
+        table.insert(campos, "descricao = ?")
+        table.insert(valores, data.descricao)
+    end
+    
+    if data.dataInicio then
+        table.insert(campos, "data_inicio = ?")
+        table.insert(valores, data.dataInicio)
+    end
+    
+    if data.dataFim then
+        table.insert(campos, "data_fim = ?")
+        table.insert(valores, data.dataFim)
+    end
+    
+    if data.local then
+        table.insert(campos, "local = ?")
+        table.insert(valores, data.local)
+    end
+    
+    if data.status then
+        table.insert(campos, "status = ?")
+        table.insert(valores, data.status)
+    end
+    
+    if data.notas then
+        table.insert(campos, "notas = ?")
+        table.insert(valores, data.notas)
+    end
+    
+    if data.participantes then
+        table.insert(campos, "participantes = ?")
+        table.insert(valores, json.encode(data.participantes))
+    end
+    
+    if data.documentos_relacionados then
+        table.insert(campos, "documentos_relacionados = ?")
+        table.insert(valores, json.encode(data.documentos_relacionados))
+    end
+    
+    -- Se não há campos para atualizar
+    if #campos == 0 then
+        TriggerClientEvent('Notify', source, 'negado', 'Nenhum dado para atualizar!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateCalendarEvent', {success = false, error = "Sem dados para atualizar"})
+        return
+    end
+    
+    -- Adicionar atualização de updated_at
+    table.insert(campos, "updated_at = NOW()")
+    
+    -- Adicionar ID para a cláusula WHERE
+    table.insert(valores, data.id)
+    
+    -- Executar atualização
+    local success = exports.oxmysql:execute(
+        "UPDATE oac_calendario SET " .. table.concat(campos, ", ") .. " WHERE id = ?",
+        valores
+    )
+    
+    -- Verificar resultado
+    if success then
+        -- Verificar se houve alteração no evento para notificar participantes
+        local eventoResult = exports.oxmysql:executeSync("SELECT * FROM oac_calendario WHERE id = ?", {data.id})
+        
+        if eventoResult and #eventoResult > 0 then
+            -- Notificar participantes sobre a atualização
+            NotificarParticipantesEventoAlterado(eventoResult[1])
+        end
+        
+        -- Registrar log
+        LogAcao(source, "atualizar_evento_calendario", {
+            id = data.id,
+            campos_atualizados = campos
+        })
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Evento atualizado com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateCalendarEvent', {
+            success = true,
+            message = "Evento atualizado com sucesso"
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao atualizar evento no banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'updateCalendarEvent', {
+            success = false,
+            error = "Erro ao atualizar evento no banco de dados"
+        })
+    end
+end)
+
+-- Evento para criar decisão da alta ordem
+RegisterServerEvent('oac:createAltaOrdemDecisao')
+AddEventHandler('oac:createAltaOrdemDecisao', function(data)
+    local source = source
+    
+    -- Verificar permissão
+    if not VerificarPermissaoAltaOrdem(source) then
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para criar decisões da Alta Ordem!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createAltaOrdemDecisao', {success = false, error = "Sem permissão"})
+        return
+    end
+    
+    -- Verificar dados
+    if not data.tipo or not data.titulo or not data.conteudo then
+        TriggerClientEvent('Notify', source, 'negado', 'Dados incompletos para criação da decisão!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createAltaOrdemDecisao', {success = false, error = "Dados incompletos"})
+        return
+    end
+    
+    -- Obter informações do jogador
+    local user_id = vRP.getUserId(source)
+    local identity = vRP.userIdentity(user_id)
+    
+    if not identity then
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao obter dados do jogador!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createAltaOrdemDecisao', {success = false, error = "Erro de identidade"})
+        return
+    end
+    
+    -- Gerar ID único para a decisão
+    local id = GerarId()
+    
+    -- Preparar data efetiva (se fornecida ou agora)
+    local dataEfetiva = data.dataEfetiva or os.date("%Y-%m-%d %H:%M:%S")
+    
+    -- Preparar dados para inserção
+    local decisaoData = {
+        id = id,
+        tipo = data.tipo,
+        titulo = data.titulo,
+        conteudo = data.conteudo,
+        autor_id = tostring(user_id),
+        autor_nome = identity.name .. " " .. identity.name2,
+        data_efetiva = dataEfetiva,
+        status = data.status or "ativo",
+        referencias = data.referencias and json.encode(data.referencias) or "[]"
+    }
+    
+    -- Inserir no banco de dados
+    local success = exports.oxmysql:execute([[
+        INSERT INTO oac_alta_ordem 
+        (id, tipo, titulo, conteudo, autor_id, autor_nome, data_efetiva, status, referencias) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ]], {
+        decisaoData.id,
+        decisaoData.tipo,
+        decisaoData.titulo,
+        decisaoData.conteudo,
+        decisaoData.autor_id,
+        decisaoData.autor_nome,
+        decisaoData.data_efetiva,
+        decisaoData.status,
+        decisaoData.referencias
+    })
+    
+    -- Verificar resultado
+    if success then
+        -- Adicionar ao cache
+        table.insert(Cache.AltaOrdem, 1, decisaoData)
+        
+        -- Registrar log
+        LogAcao(source, "criar_decisao_alta_ordem", {
+            id = id,
+            tipo = data.tipo,
+            titulo = data.titulo
+        })
+        
+        -- Notificar todos os advogados online
+        NotificarNovaDecisaoAltaOrdem(decisaoData)
+        
+        -- Notificar cliente
+        TriggerClientEvent('Notify', source, 'sucesso', 'Decisão criada com sucesso!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createAltaOrdemDecisao', {
+            success = true,
+            message = "Decisão criada com sucesso",
+            id = id
+        })
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Erro ao criar decisão no banco de dados!', 5000)
+        TriggerClientEvent('oac:callback', source, 'createAltaOrdemDecisao', {
+            success = false,
+            error = "Erro ao criar decisão no banco de dados"
+        })
+    end
+end)
+
+-- Funções para notificações de eventos e decisões
+function NotificarParticipantesEvento(evento)
+    -- Se não houver participantes, retornar
+    if not evento.participantes or evento.participantes == "[]" then
+        return
+    end
+    
+    -- Decodificar lista de participantes
+    local participantes = json.decode(evento.participantes)
+    
+    -- Notificar cada participante que estiver online
+    for _, participante in ipairs(participantes) do
+        local id = tonumber(participante.id)
+        if id then
+            local playerSource = vRP.getUserSource(id)
+            if playerSource then
+                -- Formatar data do evento para exibição
+                local dataEvento = string.sub(evento.data_inicio, 1, 16)
+                
+                -- Notificar sobre o evento
+                TriggerClientEvent('Notify', playerSource, 'aviso', 'Você foi adicionado a um evento!', 10000)
+                TriggerClientEvent('oac:notification', playerSource, {
+                    type = "info",
+                    title = "Novo Evento no Calendário",
+                    message = evento.titulo .. " - " .. dataEvento,
+                    icon = "calendar"
+                })
+            end
+        end
+    end
+end
+
+function NotificarParticipantesEventoAlterado(evento)
+    -- Se não houver participantes, retornar
+    if not evento.participantes or evento.participantes == "[]" then
+        return
+    end
+    
+    -- Decodificar lista de participantes
+    local participantes = json.decode(evento.participantes)
+    
+    -- Notificar cada participante que estiver online
+    for _, participante in ipairs(participantes) do
+        local id = tonumber(participante.id)
+        if id then
+            local playerSource = vRP.getUserSource(id)
+            if playerSource then
+                -- Formatar data do evento para exibição
+                local dataEvento = string.sub(evento.data_inicio, 1, 16)
+                
+                -- Notificar sobre a alteração
+                TriggerClientEvent('Notify', playerSource, 'aviso', 'Um evento do calendário foi alterado!', 10000)
+                TriggerClientEvent('oac:notification', playerSource, {
+                    type = "warning",
+                    title = "Evento Atualizado",
+                    message = evento.titulo .. " - " .. dataEvento,
+                    icon = "calendar-edit"
+                })
+            end
+        end
+    end
+end
+
+function NotificarNovaDecisaoAltaOrdem(decisao)
+    -- Obter todos os jogadores online
+    local players = GetPlayers()
+    
+    for _, playerId in ipairs(players) do
+        -- Verificar se tem permissão do fórum
+        if VerificarPermissaoForum(tonumber(playerId)) then
+            -- Enviar notificação
+            TriggerClientEvent('Notify', tonumber(playerId), 'aviso', 'Nova decisão da Alta Ordem publicada!', 10000)
+            TriggerClientEvent('oac:notification', tonumber(playerId), {
+                type = "info",
+                title = "Nova Decisão da Alta Ordem",
+                message = decisao.titulo,
+                icon = "gavel"
+            })
+        end
+    end
+end
+
+-- ====================================================
+-- Inicialização do sistema
+-- ====================================================
+
+-- Inicialização do servidor
+Citizen.CreateThread(function()
+    -- Inicializar banco de dados
+    InicializarBancoDados()
     
     -- Carregar dados
+    LogInfo("Iniciando carregamento de dados...")
+    
     CarregarLeis()
     CarregarPassaportes()
     CarregarDocumentos()
     CarregarUsuarios()
     CarregarProcessos()
+    CarregarEventosCalendario()
+    CarregarDecisoesAltaOrdem()
     
-    LogInfo("Sistema OAC iniciado com sucesso!")
+    LogInfo("Carregamento de dados concluído.")
+    
+    -- Agendar tarefas automáticas
+    AgendarTarefasAutomaticas()
+    
+    -- Sincronizar dados com clientes conectados na inicialização
+    Citizen.Wait(10000) -- Esperar 10 segundos para garantir que os clientes estejam conectados
+    SincronizarDadosComClientes()
+    
+    LogInfo("Sistema OAC inicializado com sucesso!")
 end)
+
+-- Comando para recarregar os dados
+RegisterCommand("oac_reload", function(source, args)
+    -- Verificar se é administrador
+    local user_id = vRP.getUserId(source)
+    if source == 0 or vRP.hasPermission(user_id, "admin.permissao") then
+        -- Recarregar dados
+        CarregarLeis()
+        CarregarPassaportes()
+        CarregarDocumentos()
+        CarregarUsuarios()
+        CarregarProcessos()
+        CarregarEventosCalendario()
+        CarregarDecisoesAltaOrdem()
+        
+        -- Sincronizar com clientes
+        SincronizarDadosComClientes()
+        
+        -- Notificar
+        if source > 0 then
+            TriggerClientEvent('Notify', source, 'sucesso', 'Sistema OAC recarregado com sucesso!', 5000)
+        else
+            LogInfo("Sistema OAC recarregado com sucesso!")
+        end
+    else
+        TriggerClientEvent('Notify', source, 'negado', 'Você não tem permissão para usar este comando!', 5000)
+    end
+end, false)
+
+-- Exportar funções úteis para outros recursos
+exports("VerificarPermissaoForum", VerificarPermissaoForum)
+exports("VerificarPermissaoAltaOrdem", VerificarPermissaoAltaOrdem)
+exports("ObterNivelPermissao", ObterNivelPermissao)
+exports("BuscarDocumentosBD", BuscarDocumentosBD)
+exports("LogAcao", LogAcao)
