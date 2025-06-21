@@ -1,3 +1,5 @@
+NAO ESTA FUNCIONANDO, TEM QUE REFAZER EM VUE 
+
 1. Sistema de Documentos Jurídicos
 Cadastro de Processos: permitir registrar casos criminais ou civis com nome do réu, acusação, status, etc.
 
